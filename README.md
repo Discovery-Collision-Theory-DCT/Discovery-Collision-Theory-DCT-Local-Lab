@@ -1,0 +1,614 @@
+# Discovery Collision Theory (DCT) Local Lab
+
+本项目是一个可本地复现、可审计、可扩展的研究框架，用于验证以下机制是否在**受控任务**中成立：
+
+`双轨发现（A/B） + 碰撞合成（Collision） + 多模式验证（Verifier） + 记忆回写（Memory Write-back）`
+
+是否优于单轨发现基线。
+
+---
+
+## 目录
+
+1. [研究目标](#研究目标)
+2. [科学边界与诚实声明](#科学边界与诚实声明)
+3. [系统架构](#系统架构)
+4. [实验设计](#实验设计)
+5. [指标体系](#指标体系)
+6. [项目结构](#项目结构)
+7. [环境要求](#环境要求)
+8. [快速开始（5分钟）](#快速开始5分钟)
+9. [模型后端配置（主流厂商）](#模型后端配置主流厂商)
+10. [运行实验](#运行实验)
+11. [如何比较 baseline 与 full_dct](#如何比较-baseline-与-full_dct)
+12. [输出与产物说明](#输出与产物说明)
+13. [配置说明](#配置说明)
+14. [Ablation（消融）指南](#ablation消融指南)
+15. [可选本地 API](#可选本地-api)
+16. [测试与质量保证](#测试与质量保证)
+17. [常见问题与故障排查](#常见问题与故障排查)
+18. [复现建议与研究规范](#复现建议与研究规范)
+
+---
+
+## 研究目标
+
+### DCT 假设
+智能系统的真实自增长，不主要来自单一路径优化；而来自两个或多个上升发现轨迹形成部分独立解释，再通过“碰撞”产生新候选结构，并经验证器过滤后写回记忆，从而提升后续轮次发现质量。
+
+### 本项目验证问题
+在隐藏规则重发现任务中，`full_dct` 是否较以下基线更优：
+
+- `baseline_single_a`: 仅 A 轨迹 + 验证
+- `baseline_single_b`: 仅 B 轨迹 + 验证
+- `baseline_merged_naive`: A/B 结果直接拼接（无碰撞逻辑）
+
+---
+
+## 科学边界与诚实声明
+
+### What this validates
+- 验证 DCT 机制在合成、可控、可评分任务上的有效性。
+- 验证“记忆回写”是否改善后续轮次表现。
+- 验证“碰撞合成”是否优于朴素拼接。
+
+### What this does NOT prove
+- **不证明**系统可自动发现现实世界中的根本科学定律。
+- **不证明**超越任务设计边界的通用科学自主性。
+- **不证明**实验结果可直接迁移到高噪声、开放世界问题。
+
+---
+
+## 系统架构
+
+### 模块分工
+
+- `trajectory_a`：归纳/压缩偏置（模式、符号规律）
+- `trajectory_b`：机制/反事实偏置（因果解释、干预敏感）
+- `collision_engine`：检测重叠/矛盾/互补并合成候选
+- `verifier`：多模式验证（predictive / symbolic / simulation）
+- `memory`：SQLite 持久化（候选、验证、接受理论、谱系）
+- `orchestrator`：迭代控制循环
+
+### 执行流程
+
+```text
+observe
+  -> trajectory_a proposes hypotheses
+  -> trajectory_b proposes hypotheses
+  -> collision_engine synthesizes collision hypotheses
+  -> verifier evaluates candidates
+  -> accept / reject
+  -> memory write-back
+  -> next round
+```
+
+### 碰撞评分维度（已实现）
+
+- `structural_complementarity`
+- `predictive_overlap`
+- `explanatory_gain`
+- `novelty`（相对 memory）
+- `collision_strength`（加权汇总）
+
+---
+
+## 实验设计
+
+### Benchmark Families（3类）
+
+1. Hidden symbolic rule discovery
+- 整数映射、布尔规则、代数映射等隐藏规则重建。
+
+2. Hidden dynamical system discovery
+- 局部元胞更新、图传播阈值、有限状态转移规则。
+
+3. Theory compression / rediscovery
+- 噪声观测下恢复更简洁、更接近真实生成规则的解释。
+
+### Baselines
+
+- `baseline_single_a`
+- `baseline_single_b`
+- `baseline_merged_naive`
+- `full_dct`
+
+### 轮次与试验
+
+- `quickstart`: 轻量、适合笔记本快速验证。
+- `full_experiment`: 多 trial 与更多轮次，适合统计比较。
+
+---
+
+## 指标体系
+
+本项目报告以下指标（对应代码真实行为）：
+
+1. `validity_rate`
+- 通过验证且被接受候选的比例。
+
+2. `heldout_predictive_accuracy`
+- 每轮 top 表现在 held-out 上的平均精度。
+
+3. `rule_recovery_exact_match_rate`
+- 被接受候选中，表达式与真值表达式规范化后完全相等的比例。
+
+4. `compression_score`
+- 以表达式长度为代理：`1 / (1 + len(expression))`。
+
+5. `novelty_score`
+- 候选与 memory 表达式 token Jaccard 相似度反向量。
+
+6. `time_to_valid_discovery`
+- 首次出现有效接受候选的 round index；若无则置为 `round_count + 1`。
+
+7. `cumulative_improvement`
+- 按轮次累计“最优 held-out 精度的净提升”。
+
+8. `uplift`
+- `full_dct` 相对各 baseline 的差值（目前汇总 4 项：validity/accuracy/exact/cumulative）。
+
+---
+
+## 项目结构
+
+```text
+.
+├── dct/
+│   ├── agents/          # A/B 轨迹、collision、verifier
+│   ├── benchmarks/      # symbolic / dynamical / compression
+│   ├── llm/             # OpenAI-compatible provider
+│   ├── memory/          # SQLite 持久化
+│   ├── orchestration/   # 实验编排与 baseline
+│   ├── reporting/       # CSV/JSON 写出 + plotting
+│   ├── prompts/         # 可编辑 prompt 模板
+│   ├── api/             # 可选 FastAPI
+│   ├── cli.py           # Typer CLI
+│   └── config.py        # env + yaml 配置加载
+├── config/
+│   ├── quickstart.yaml
+│   └── full_experiment.yaml
+├── scripts/
+├── tests/
+└── reports/example_report.md
+```
+
+---
+
+## 环境要求
+
+- Python `3.11+`
+- 主流模型服务（OpenAI-compatible / Anthropic / Gemini）
+- 默认推荐：Ollama（本地模式）
+
+运行模式：
+- `MODEL_ACCESS_MODE=local`：仅允许本地 endpoint（默认）
+- `MODEL_ACCESS_MODE=online`：允许在线 API endpoint（需显式授权）
+
+说明：
+- 项目默认仍是“本地优先”。
+- 若使用在线 API，必须显式开启 `ALLOW_REMOTE_INFERENCE=true`。
+
+---
+
+## 快速开始（5分钟）
+
+### 1) 创建虚拟环境并安装
+
+```bash
+cd /Users/lihiko/repo/research/ProjectAletheon
+
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+cp .env.example .env
+```
+
+### 2) 启动 Ollama
+
+```bash
+# Terminal A
+ollama serve
+```
+
+```bash
+# Terminal B
+ollama pull deepseek-r1:70b
+dct check-model
+```
+
+### 3) 跑 quickstart
+
+```bash
+dct quickstart
+# 或
+python -m dct.cli quickstart
+```
+
+---
+
+## 模型后端配置（主流厂商）
+
+项目已支持多 provider 路由，分两类：
+
+1. OpenAI-compatible 家族（统一走 `/chat/completions`）
+- `openai_compatible`（通用）
+- `openai`
+- `azure_openai`
+- `xai`
+- `deepseek`
+- `groq`
+- `mistral`
+- `together`
+- `fireworks`
+- `openrouter`
+- `ollama`
+- `lmstudio`
+- `vllm`
+- `llamacpp`
+
+2. 原生 API
+- `anthropic`（Claude）
+- `gemini`（Google Gemini）
+
+核心控制变量：
+- `MODEL_PROVIDER`
+- `MODEL_ACCESS_MODE`（`local` 或 `online`）
+- `ALLOW_REMOTE_INFERENCE`（`true/false`）
+- `MODEL_NAME`
+- `MODEL_TEMPERATURE`
+- `MODEL_TIMEOUT_SECONDS`
+
+### 默认本地模式（推荐）
+
+```env
+MODEL_PROVIDER=openai_compatible
+MODEL_ACCESS_MODE=local
+ALLOW_REMOTE_INFERENCE=false
+OPENAI_BASE_URL=http://localhost:11434/v1
+OPENAI_API_KEY=ollama
+MODEL_NAME=deepseek-r1:70b
+```
+
+### 在线 OpenAI-compatible 示例（OpenAI / xAI / DeepSeek / Groq / Mistral / OpenRouter）
+
+```env
+MODEL_PROVIDER=openai
+MODEL_ACCESS_MODE=online
+ALLOW_REMOTE_INFERENCE=true
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_API_KEY=sk-...
+MODEL_NAME=gpt-5-mini
+```
+
+### 在线 Anthropic 示例
+
+```env
+MODEL_PROVIDER=anthropic
+MODEL_ACCESS_MODE=online
+ALLOW_REMOTE_INFERENCE=true
+ANTHROPIC_BASE_URL=https://api.anthropic.com
+ANTHROPIC_API_KEY=sk-ant-...
+MODEL_NAME=claude-sonnet-4-5
+```
+
+### 在线 Gemini 示例
+
+```env
+MODEL_PROVIDER=gemini
+MODEL_ACCESS_MODE=online
+ALLOW_REMOTE_INFERENCE=true
+GOOGLE_BASE_URL=https://generativelanguage.googleapis.com
+GOOGLE_API_KEY=AIza...
+MODEL_NAME=gemini-2.5-pro
+```
+
+### CLI 覆盖方式
+
+OpenAI-compatible:
+
+```bash
+dct run --config config/quickstart.yaml \
+  --model-provider openai \
+  --model-access-mode online \
+  --allow-remote-inference \
+  --openai-base-url https://api.openai.com/v1 \
+  --openai-api-key "$OPENAI_API_KEY" \
+  --model-name gpt-5-mini
+```
+
+Anthropic:
+
+```bash
+dct run --config config/quickstart.yaml \
+  --model-provider anthropic \
+  --model-access-mode online \
+  --allow-remote-inference \
+  --anthropic-api-key "$ANTHROPIC_API_KEY" \
+  --model-name claude-sonnet-4-5
+```
+
+Gemini:
+
+```bash
+dct run --config config/quickstart.yaml \
+  --model-provider gemini \
+  --model-access-mode online \
+  --allow-remote-inference \
+  --google-api-key "$GOOGLE_API_KEY" \
+  --model-name gemini-2.5-pro
+```
+
+---
+
+## 运行实验
+
+### Quickstart（轻量）
+
+```bash
+dct run --config config/quickstart.yaml
+```
+
+默认参数：
+- trials: 1
+- rounds: 2
+- hypotheses_per_trajectory: 2
+- families: symbolic/dynamical/compression
+
+### Full Experiment（更稳健统计）
+
+```bash
+dct run --config config/full_experiment.yaml
+```
+
+默认参数：
+- trials: 3
+- rounds: 6
+- hypotheses_per_trajectory: 4
+
+### 可用 CLI
+
+```bash
+dct --help
+dct check-model
+dct check-model --model-provider openai --model-access-mode online --allow-remote-inference --openai-base-url https://api.openai.com/v1 --openai-api-key "$OPENAI_API_KEY" --model-name gpt-5-mini
+dct check-model --model-provider anthropic --model-access-mode online --allow-remote-inference --anthropic-api-key "$ANTHROPIC_API_KEY" --model-name claude-sonnet-4-5
+dct check-model --model-provider gemini --model-access-mode online --allow-remote-inference --google-api-key "$GOOGLE_API_KEY" --model-name gemini-2.5-pro
+dct quickstart
+dct run --config config/quickstart.yaml
+dct run --config config/full_experiment.yaml
+dct run --config config/quickstart.yaml --model-provider openai --model-access-mode online --allow-remote-inference --openai-base-url https://api.openai.com/v1 --openai-api-key "$OPENAI_API_KEY" --model-name gpt-5-mini
+dct run --config config/quickstart.yaml --model-provider anthropic --model-access-mode online --allow-remote-inference --anthropic-api-key "$ANTHROPIC_API_KEY" --model-name claude-sonnet-4-5
+dct run --config config/quickstart.yaml --model-provider gemini --model-access-mode online --allow-remote-inference --google-api-key "$GOOGLE_API_KEY" --model-name gemini-2.5-pro
+dct serve --output-root outputs --host 127.0.0.1 --port 8000
+```
+
+---
+
+## 如何比较 baseline 与 full_dct
+
+### 方法 1：直接查看 uplift
+
+运行后查看：
+
+- `outputs/.../<run_name>/summary.json`
+
+其中 `uplift` 为 `full_dct - baseline`，正值代表 full_dct 更优。
+
+### 方法 2：看方法级汇总表
+
+- `method_summaries.csv`
+
+重点比较：
+- `validity_rate`
+- `heldout_predictive_accuracy`
+- `rule_recovery_exact_match_rate`
+- `cumulative_improvement`
+
+### 方法 3：看图
+
+- `plots/method_accuracy.png`
+- `plots/method_validity.png`
+- `plots/cumulative_improvement.png`
+- `plots/family_*_accuracy.png`
+
+---
+
+## 输出与产物说明
+
+每次运行会生成目录：
+
+`<output_dir>/<run_name>/`
+
+关键文件：
+
+- `summary.json`：总结果 + uplift
+- `method_summaries.csv`：方法级指标
+- `candidate_logs.csv`：候选级日志（每条假设）
+- `round_summaries.jsonl`：轮次级记录
+- `plots/*.png`：可视化图
+
+### SQLite 记忆库
+
+默认数据库：
+- `outputs/dct_memory.db`
+
+记录内容：
+- observations
+- hypotheses
+- verifications
+- accepted_theories
+- lineage
+
+---
+
+## 配置说明
+
+### `.env`（运行时）
+
+- `MODEL_PROVIDER`
+- `OPENAI_BASE_URL`
+- `OPENAI_API_KEY`
+- `ANTHROPIC_BASE_URL`
+- `ANTHROPIC_API_KEY`
+- `GOOGLE_BASE_URL`
+- `GOOGLE_API_KEY`
+- `MODEL_NAME`
+- `MODEL_TEMPERATURE`
+- `MODEL_TIMEOUT_SECONDS`
+- `MODEL_ACCESS_MODE`
+- `ALLOW_REMOTE_INFERENCE`
+- `DCT_OUTPUT_DIR`
+- `DCT_SQLITE_PATH`
+- `DCT_CHECK_MODEL_ON_START`
+
+### YAML（实验）
+
+核心字段：
+- `seed`
+- `trials`
+- `rounds`
+- `hypotheses_per_trajectory`
+- `baselines`
+- `benchmark_families`
+- `samples_per_task_train`
+- `samples_per_task_heldout`
+- `verifier_modes`
+- `ablation.*`
+- `output_dir`
+
+---
+
+## Ablation（消融）指南
+
+在 config 中配置：
+
+```yaml
+ablation:
+  no_collision: false
+  no_memory_write_back: false
+  no_verifier: false
+  single_verifier_mode_only: null
+```
+
+### 常见消融组合
+
+1. 禁用碰撞
+```yaml
+no_collision: true
+```
+
+2. 禁用记忆回写
+```yaml
+no_memory_write_back: true
+```
+
+3. 禁用验证器（仅保留快速打分选优）
+```yaml
+no_verifier: true
+```
+
+4. 只保留单一验证模式
+```yaml
+single_verifier_mode_only: predictive
+```
+
+---
+
+## 可选本地 API
+
+启动：
+
+```bash
+dct serve --output-root outputs --host 127.0.0.1 --port 8000
+```
+
+接口：
+- `GET /health`
+- `GET /runs`
+- `GET /runs/{run_name}`
+- `GET /latest`
+
+---
+
+## 测试与质量保证
+
+运行测试：
+
+```bash
+pytest
+```
+
+当前测试覆盖：
+- benchmark 生成
+- collision 产出
+- verifier 多模式结构化输出
+- orchestrator 端到端（fake provider）
+
+---
+
+## 常见问题与故障排查
+
+### 1) `dct` 命令找不到
+
+```bash
+python -m dct.cli quickstart
+```
+
+或确认已执行：
+
+```bash
+pip install -e '.[dev]'
+```
+
+### 2) 模型不可达
+
+先检查：
+
+```bash
+dct check-model
+```
+
+若失败：
+- 本地模式（Ollama）：`ollama serve`、`ollama pull deepseek-r1:70b`、`curl http://localhost:11434/v1/models`
+- 在线模式：检查 `MODEL_PROVIDER` 对应 API key 与 base URL 是否正确
+- 再次执行：`dct check-model`
+
+### 3) 模型输出 JSON 不稳定
+
+建议：
+- 降低 `MODEL_TEMPERATURE`（例如 `0.1`）
+- 使用更稳定的模型（本地或在线）
+- 保持 prompt 模板严格 JSON 输出
+
+### 4) zsh 安装报 `no matches found: .[dev]`
+
+用引号：
+
+```bash
+pip install -e '.[dev]'
+```
+
+---
+
+## 复现建议与研究规范
+
+- 固定 `seed`、模型版本、配置文件。
+- 保留完整 `outputs/<run_name>/` 目录用于审计。
+- 比较结果时以多 trial 平均值为主，单次 run 仅作定性参考。
+- 若跨模型比较，建议每模型单独多次运行并统一配置。
+
+---
+
+## 附：示例报告
+
+项目提供示例报告模板：
+
+- `reports/example_report.md`
+
+用于组织以下内容：
+- 实验设置
+- 核心表格
+- uplift 解读
+- 科学边界声明
+# Discovery-Collision-Theory-DCT-Local-Lab

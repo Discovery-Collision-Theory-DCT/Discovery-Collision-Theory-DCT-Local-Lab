@@ -1,0 +1,6 @@
+BASELINE_SINGLE_A = "baseline_single_a"
+BASELINE_SINGLE_B = "baseline_single_b"
+BASELINE_MERGED_NAIVE = "baseline_merged_naive"
+FULL_DCT = "full_dct"
+
+ALL_METHODS = [BASELINE_SINGLE_A, BASELINE_SINGLE_B, BASELINE_MERGED_NAIVE, FULL_DCT]

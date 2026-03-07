@@ -1,0 +1,26 @@
+name: full_experiment
+seed: 123
+trials: 3
+rounds: 6
+hypotheses_per_trajectory: 4
+baselines:
+  - baseline_single_a
+  - baseline_single_b
+  - baseline_merged_naive
+  - full_dct
+benchmark_families:
+  - symbolic
+  - dynamical
+  - compression
+samples_per_task_train: 40
+samples_per_task_heldout: 20
+verifier_modes:
+  - predictive
+  - symbolic
+  - simulation
+ablation:
+  no_collision: false
+  no_memory_write_back: false
+  no_verifier: false
+  single_verifier_mode_only: null
+output_dir: outputs/full_experiment

@@ -1,0 +1,174 @@
+Optimize for a minimal but real experiment, not a flashy demo.
+
+You are a senior research engineer and experimental AI systems builder.
+
+Build a fully local, reproducible Python project that validates a hypothesis I call “Discovery Collision Theory (DCT)”:
+
+DCT hypothesis:
+Real self-growth in an intelligent system does not mainly come from optimizing along one path. It comes from two or more rising discovery trajectories that generate partially independent explanations, then collide to produce new candidate structures. A verifier filters false candidates, and accepted candidates are written back into memory so later discovery improves.
+
+Goal:
+Create a local-only experimental framework that tests whether:
+(dual-track discovery + collision + verifier + memory write-back)
+beats
+(single-track discovery baselines)
+on hidden-rule rediscovery and hypothesis quality.
+
+Hard constraints:
+1. Everything must run locally on my machine.
+2. No cloud APIs, no paid APIs, no remote inference.
+3. The LLM backend must be configurable through an OpenAI-compatible local endpoint.
+4. Default backend configuration should target Ollama at http://localhost:11434/v1, but the code must also support llama.cpp / LM Studio / vLLM by only changing environment variables.
+5. Use Python 3.11+.
+6. Keep dependencies reasonable and documented.
+7. The system must be runnable end-to-end from a fresh repo after local model setup.
+8. Do not assume internet during runtime.
+9. Do not hide complexity behind mock demos. Build a real minimal working framework.
+
+Architecture requirements:
+Implement these modules:
+
+A. trajectory_a
+- A discovery agent optimized for inductive pattern finding.
+- It should propose candidate rules from observations.
+- Example style: compression-oriented, pattern-oriented, symbolic induction biased.
+
+B. trajectory_b
+- A discovery agent optimized for mechanistic or counterfactual explanation.
+- It should generate alternative hypotheses from the same observations.
+- Example style: causal/mechanistic/explanatory bias.
+
+C. collision_engine
+- Takes outputs from A and B.
+- Detects overlap, contradiction, complementarity, and potential high-value merges.
+- Produces one or more “collision hypotheses”.
+- Must score collision strength using at least:
+  - structural complementarity
+  - predictive overlap
+  - explanatory gain
+  - novelty relative to memory
+
+D. verifier
+- Must support at least three verifier modes:
+  1. predictive verifier: evaluate on held-out data
+  2. symbolic/formal verifier: when possible, check exact consistency
+  3. simulation verifier: test hypotheses in generated environments
+- The verifier must output structured JSON with pass/fail, confidence, and reason.
+
+E. memory
+- Persistent local storage using SQLite.
+- Save observations, hypotheses, collision hypotheses, verification results, accepted theories, and lineage.
+- Track which accepted hypotheses improve later rounds.
+
+F. orchestrator
+- Runs iterative rounds:
+  observe -> A proposes -> B proposes -> collide -> verify -> accept/reject -> write back -> next round
+
+Benchmark design:
+Implement at least 3 benchmark families to validate the mechanism.
+
+1. Hidden symbolic rule discovery
+- Generate synthetic datasets from secret symbolic rules.
+- Examples:
+  - integer sequence generators
+  - algebraic mappings
+  - Boolean rule systems
+- The model should infer rules from examples and predict held-out cases.
+
+2. Hidden dynamical system discovery
+- Generate small simulated worlds with hidden transition rules.
+- Examples:
+  - cellular automata variants
+  - graph propagation rules
+  - finite-state systems
+- The system should infer transition principles from rollouts.
+
+3. Theory compression / rediscovery benchmark
+- Start from noisy observations generated from a known compact rule.
+- Score whether the system can recover a simpler and truer explanation than surface-level fits.
+
+Baselines:
+Implement at least these baselines:
+- baseline_single_a: only trajectory A + verifier
+- baseline_single_b: only trajectory B + verifier
+- baseline_merged_naive: combine A and B outputs by concatenation only, with no collision logic
+- full_dct: A + B + collision engine + verifier + memory write-back
+
+Metrics:
+Implement and report:
+1. validity rate
+2. held-out predictive accuracy
+3. rule recovery exact match rate (when ground truth is known)
+4. compression score / description length proxy
+5. novelty score relative to prior memory
+6. time-to-valid-discovery
+7. cumulative improvement across rounds
+8. uplift of full_dct over each baseline
+
+Experimental standards:
+- Use deterministic seeds where possible.
+- Save every experiment run as JSON and CSV.
+- Produce plots for each benchmark.
+- Log every candidate hypothesis and verification outcome.
+- Support repeated trials and aggregate summary statistics.
+- Include ablation toggles:
+  - no collision
+  - no memory write-back
+  - no verifier
+  - single verifier mode only
+
+Implementation details:
+- Use a clean project structure.
+- Use Pydantic models for schemas.
+- Use FastAPI for an optional local dashboard/API.
+- Use Typer or argparse for CLI commands.
+- Use matplotlib for plots.
+- Use pytest for tests.
+- Use dotenv or environment variables for configuration.
+
+Model interface requirements:
+Create a provider abstraction with:
+- OPENAI_BASE_URL
+- OPENAI_API_KEY
+- MODEL_NAME
+- MODEL_TEMPERATURE
+Default should work with local OpenAI-compatible servers.
+Do not hardcode any cloud provider.
+If API key is not needed locally, allow a dummy key.
+
+Prompting requirements inside the code:
+- Trajectory A and B must have distinct system prompts and search styles.
+- Verifier prompt must be strict and output valid JSON.
+- Collision prompt must explicitly seek synthesis rather than summary.
+- Keep prompts in separate template files for easy editing.
+
+Deliverables:
+1. Complete repo structure
+2. All source code
+3. README with exact setup and run commands
+4. .env.example
+5. requirements.txt or pyproject.toml
+6. sample config file
+7. sample local experiment script
+8. tests
+9. one example output report in markdown
+10. a short section in README called “What this validates” and another called “What this does NOT prove”
+
+Important scientific honesty requirement:
+The framework must clearly state that success on synthetic and hidden-rule benchmarks does NOT prove the system can automatically discover fundamentally new real-world scientific laws. It only validates whether the DCT mechanism improves discovery in controlled settings.
+
+Usability requirements:
+- Make the default experiment lightweight enough to run on a consumer laptop with a small local model.
+- Add a “quickstart” mode and a “full experiment” mode.
+- Fail gracefully when the local model server is unavailable.
+- Print actionable error messages.
+
+What I want from you right now:
+1. Create the full project.
+2. Show the final repo tree first.
+3. Then write all files.
+4. Then provide exact commands to run with Ollama locally.
+5. Then provide exact commands to run the quick benchmark.
+6. Then explain how to compare baseline vs full_dct.
+7. Do not ask me clarifying questions.
+8. Make reasonable engineering choices and proceed.
