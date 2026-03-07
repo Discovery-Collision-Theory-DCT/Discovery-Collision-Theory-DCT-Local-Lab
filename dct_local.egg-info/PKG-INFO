@@ -1,3 +1,24 @@
+Metadata-Version: 2.4
+Name: dct-local
+Version: 0.1.0
+Summary: Local Discovery Collision Theory experiment framework
+Author: Project Aletheon
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: typer>=0.12.3
+Requires-Dist: pydantic>=2.8.2
+Requires-Dist: python-dotenv>=1.0.1
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn>=0.30.0
+Requires-Dist: matplotlib>=3.9.0
+Requires-Dist: numpy>=1.26.4
+Requires-Dist: PyYAML>=6.0.2
+Provides-Extra: dev
+Requires-Dist: pytest>=8.2.2; extra == "dev"
+Dynamic: license-file
+
 # Discovery Collision Theory (DCT) Local Lab
 
 本项目是一个可本地复现、可审计、可扩展的研究框架，用于验证以下机制是否在**受控任务**中成立：
