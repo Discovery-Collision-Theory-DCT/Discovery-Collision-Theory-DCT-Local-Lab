@@ -22,9 +22,13 @@ class TrajectoryAAgent:
         user_prompt = build_discovery_prompt(task, memory_summaries, hypotheses_to_generate)
         data = self.provider.generate_json(self.system_prompt, user_prompt)
         raw = data.get("hypotheses", [])
+        if not isinstance(raw, list):
+            raw = []
 
         hypotheses: list[Hypothesis] = []
         for item in raw[: hypotheses_to_generate or len(raw)]:
+            if not isinstance(item, dict):
+                continue
             expression = str(item.get("expression", "")).strip()
             if not expression:
                 continue

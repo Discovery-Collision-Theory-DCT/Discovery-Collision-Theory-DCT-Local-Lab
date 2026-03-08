@@ -45,10 +45,11 @@ class OpenAICompatibleProvider:
             return False, f"Failed to reach model endpoint at {models_url}: {exc}"
 
     def generate_json(self, system_prompt: str, user_prompt: str, max_tokens: int = 800) -> dict:
+        effective_max_tokens = self._effective_max_tokens(max_tokens)
         payload = {
             "model": self.settings.model_name,
             "temperature": self.settings.model_temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max_tokens,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -56,6 +57,15 @@ class OpenAICompatibleProvider:
         }
         try:
             data = self._post_chat_completion(payload=payload, prefer_json_mode=True)
+        except httpx.ReadTimeout as exc:
+            timeout_seconds = self._effective_timeout_seconds(self.settings.model_name)
+            raise ModelUnavailableError(
+                "Could not query online model API endpoint. "
+                f"Base URL: {self.settings.openai_base_url}, Model: {self.settings.model_name}. "
+                f"The request timed out after {timeout_seconds:.0f}s. "
+                "For DeepSeek reasoning models, increase MODEL_TIMEOUT_SECONDS (recommended >= 180) "
+                "or switch to deepseek-chat for structured JSON tasks."
+            ) from exc
         except httpx.HTTPError as exc:
             if self.settings.is_remote_endpoint():
                 message = (
@@ -97,7 +107,7 @@ class OpenAICompatibleProvider:
                 last_parse_exc = exc
 
         repair_source = parse_candidates[0] if parse_candidates else json.dumps(data)[:4000]
-        repaired = self._repair_json_text(text=repair_source, max_tokens=max_tokens)
+        repaired = self._repair_json_text(text=repair_source, max_tokens=effective_max_tokens)
         if repaired is not None:
             self._emit_output(system_prompt=system_prompt, text=repaired, phase="repair")
             try:
@@ -120,38 +130,51 @@ class OpenAICompatibleProvider:
         }
 
     def _repair_json_text(self, text: str, max_tokens: int) -> str | None:
-        repair_payload = {
-            "model": self.settings.model_name,
-            "temperature": 0.0,
-            "max_tokens": max(300, min(900, max_tokens)),
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You repair malformed JSON. "
-                        "Return ONLY one valid JSON object. No markdown, no commentary."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "Fix the following model output into a valid JSON object without changing field intent:\\n\\n"
-                        f"{text[:4000]}"
-                    ),
-                },
-            ],
-        }
-        try:
-            data = self._post_chat_completion(payload=repair_payload, prefer_json_mode=True)
-            repaired, reasoning = self._extract_chat_texts(data)
-            if not repaired.strip():
-                repaired = reasoning
-            return repaired if repaired.strip() else None
-        except Exception:  # noqa: BLE001
-            return None
+        repair_models = [self.settings.model_name]
+        fallback = self._repair_fallback_model_name()
+        if fallback and fallback not in repair_models:
+            repair_models.append(fallback)
+
+        for repair_model in repair_models:
+            repair_payload = {
+                "model": repair_model,
+                "temperature": 0.0,
+                "max_tokens": max(300, min(1200, max_tokens)),
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You repair malformed JSON. "
+                            "Return ONLY one valid JSON object. No markdown, no commentary."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            "Fix the following model output into a valid JSON object without changing field intent:\\n\\n"
+                            f"{text[:4000]}"
+                        ),
+                    },
+                ],
+            }
+            try:
+                data = self._post_chat_completion(payload=repair_payload, prefer_json_mode=True)
+                repaired, reasoning = self._extract_chat_texts(data)
+                if not repaired.strip():
+                    repaired = reasoning
+                if repaired.strip():
+                    try:
+                        try_parse_json(repaired)
+                        return repaired
+                    except Exception:  # noqa: BLE001
+                        continue
+            except Exception:  # noqa: BLE001
+                continue
+        return None
 
     def _post_chat_completion(self, payload: dict[str, Any], prefer_json_mode: bool) -> dict[str, Any]:
         url = f"{self.base_url}/chat/completions"
+        timeout_seconds = self._effective_timeout_seconds(payload.get("model"))
         attempts: list[dict[str, Any]] = []
         if prefer_json_mode:
             with_json_mode = dict(payload)
@@ -161,18 +184,27 @@ class OpenAICompatibleProvider:
 
         last_error: Exception | None = None
         for idx, attempt in enumerate(attempts):
-            try:
-                resp = self.client.post(url, headers=self._headers(), json=attempt)
-                resp.raise_for_status()
-                return resp.json()
-            except httpx.HTTPStatusError as exc:
-                last_error = exc
-                if idx == 0 and prefer_json_mode and self._is_response_format_unsupported(exc.response):
+            for retry_index in range(2):
+                try:
+                    resp = self.client.post(url, headers=self._headers(), json=attempt, timeout=timeout_seconds)
+                    resp.raise_for_status()
+                    return resp.json()
+                except httpx.ReadTimeout as exc:
+                    last_error = exc
+                    if retry_index == 0:
+                        continue
+                    raise
+                except httpx.HTTPStatusError as exc:
+                    last_error = exc
+                    if idx == 0 and prefer_json_mode and self._is_response_format_unsupported(exc.response):
+                        break
+                    raise
+                except httpx.HTTPError as exc:
+                    last_error = exc
+                    raise
+            if idx == 0 and prefer_json_mode and isinstance(last_error, httpx.HTTPStatusError):
+                if self._is_response_format_unsupported(last_error.response):
                     continue
-                raise
-            except httpx.HTTPError as exc:
-                last_error = exc
-                raise
 
         if last_error is not None:
             raise last_error
@@ -201,8 +233,18 @@ class OpenAICompatibleProvider:
         if not isinstance(choices, list) or not choices:
             raise KeyError("Missing choices")
 
-        message = choices[0].get("message")
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            raise KeyError("Invalid choice payload")
+
+        message = first_choice.get("message")
+        if isinstance(message, str):
+            return message, ""
         if not isinstance(message, dict):
+            # Some OpenAI-compatible backends may place text directly on choice.
+            direct = first_choice.get("text")
+            if isinstance(direct, str):
+                return direct, ""
             raise KeyError("Missing message")
 
         content_text = OpenAICompatibleProvider._extract_text_from_message_content(message.get("content"))
@@ -258,6 +300,25 @@ class OpenAICompatibleProvider:
                 if merged:
                     return merged
         return ""
+
+    def _effective_max_tokens(self, requested_max_tokens: int) -> int:
+        model = self.settings.model_name.strip().lower()
+        if "reasoner" in model:
+            return max(1600, requested_max_tokens)
+        return requested_max_tokens
+
+    def _effective_timeout_seconds(self, model_name: Any) -> float:
+        base = float(self.settings.model_timeout_seconds)
+        if isinstance(model_name, str) and "reasoner" in model_name.strip().lower():
+            return max(180.0, base)
+        return base
+
+    def _repair_fallback_model_name(self) -> str | None:
+        model = self.settings.model_name.strip()
+        low = model.lower()
+        if "reasoner" in low:
+            return model.replace("reasoner", "chat").replace("Reasoner", "chat")
+        return None
 
     def _emit_output(self, system_prompt: str, text: str, phase: str) -> None:
         if self.debug_callback is None:

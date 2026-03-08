@@ -72,7 +72,12 @@ class CollisionEngine:
         llm_candidates: list[Hypothesis] = []
         try:
             data = self.provider.generate_json(self.system_prompt, user_prompt)
-            for item in data.get("collision_hypotheses", [])[:max_to_generate]:
+            raw_candidates = data.get("collision_hypotheses", [])
+            if not isinstance(raw_candidates, list):
+                raw_candidates = []
+            for item in raw_candidates[:max_to_generate]:
+                if not isinstance(item, dict):
+                    continue
                 expression = str(item.get("expression", "")).strip()
                 if not expression:
                     continue

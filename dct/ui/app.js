@@ -99,6 +99,8 @@ function normalizePayload(formData) {
   if (!payload.config_path) delete payload.config_path;
   if (!payload.output_dir) delete payload.output_dir;
   if (!payload.model_name) delete payload.model_name;
+  if (!payload.custom_trajectory_a_prompt) delete payload.custom_trajectory_a_prompt;
+  if (!payload.custom_trajectory_b_prompt) delete payload.custom_trajectory_b_prompt;
   if (!payload.reasoner_model_name) delete payload.reasoner_model_name;
 
   return payload;
