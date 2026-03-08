@@ -544,11 +544,24 @@ single_verifier_mode_only: predictive
 dct serve --output-root outputs --host 127.0.0.1 --port 8000
 ```
 
+打开 UI 控制台：
+
+- `http://127.0.0.1:8000/`
+
+UI 可覆盖：
+- 实验启动（provider/model/access mode/config）
+- 运行作业状态（queued/running/completed/failed）
+- run 详情（method summary、uplift、plots、artifacts）
+- README 与 quick/full 配置内容浏览
+
 接口：
 - `GET /health`
 - `GET /runs`
 - `GET /runs/{run_name}`
 - `GET /latest`
+- `POST /api/run`
+- `GET /api/jobs`
+- `GET /api/runs/{run_name}/artifacts`
 
 ---
 

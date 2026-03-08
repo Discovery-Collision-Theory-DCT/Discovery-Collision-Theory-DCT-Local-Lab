@@ -35,7 +35,7 @@ dct = "dct.cli:app"
 include = ["dct*"]
 
 [tool.setuptools.package-data]
-dct = ["prompts/*.txt"]
+dct = ["prompts/*.txt", "ui/*.html", "ui/*.css", "ui/*.js"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

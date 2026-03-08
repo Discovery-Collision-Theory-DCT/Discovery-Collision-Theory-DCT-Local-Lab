@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DCT Control Surface</title>
+    <link rel="stylesheet" href="/ui-assets/styles.css" />
+  </head>
+  <body>
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Project Aletheon</p>
+        <h1>DCT Control Surface</h1>
+      </div>
+      <div class="top-actions">
+        <span id="health-badge" class="badge">Checking...</span>
+        <button id="refresh-all" class="btn btn-ghost">Refresh</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel panel-run">
+        <h2>Run Launcher</h2>
+        <p class="sub">Configure provider/model and launch experiments directly from UI.</p>
+
+        <form id="run-form">
+          <div class="grid two">
+            <label>
+              <span>Mode</span>
+              <select name="mode">
+                <option value="quickstart">quickstart</option>
+                <option value="full">full</option>
+              </select>
+            </label>
+            <label>
+              <span>Provider</span>
+              <select name="model_provider">
+                <option value="openai_compatible">openai_compatible</option>
+                <option value="openai">openai</option>
+                <option value="anthropic">anthropic</option>
+                <option value="gemini">gemini</option>
+                <option value="xai">xai</option>
+                <option value="deepseek">deepseek</option>
+                <option value="groq">groq</option>
+                <option value="mistral">mistral</option>
+                <option value="together">together</option>
+                <option value="openrouter">openrouter</option>
+                <option value="fireworks">fireworks</option>
+                <option value="ollama">ollama</option>
+                <option value="vllm">vllm</option>
+                <option value="lmstudio">lmstudio</option>
+                <option value="llamacpp">llamacpp</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="grid two">
+            <label>
+              <span>Access Mode</span>
+              <select name="model_access_mode">
+                <option value="local">local</option>
+                <option value="online">online</option>
+              </select>
+            </label>
+            <label>
+              <span>Model Name</span>
+              <input type="text" name="model_name" placeholder="deepseek-r1:70b / gpt-5-mini" />
+            </label>
+          </div>
+
+          <div class="grid two">
+            <label>
+              <span>Temperature</span>
+              <input type="number" name="model_temperature" min="0" max="2" step="0.01" value="0.2" />
+            </label>
+            <label>
+              <span>Output Dir (optional)</span>
+              <input type="text" name="output_dir" placeholder="outputs/ui_runs" />
+            </label>
+          </div>
+
+          <label>
+            <span>Config Path (optional)</span>
+            <input type="text" name="config_path" placeholder="config/quickstart.yaml" />
+          </label>
+
+          <div class="grid two">
+            <label>
+              <span>OpenAI Base URL</span>
+              <input type="text" name="openai_base_url" placeholder="http://localhost:11434/v1" />
+            </label>
+            <label>
+              <span>OpenAI API Key</span>
+              <input type="password" name="openai_api_key" placeholder="OPENAI_API_KEY" />
+            </label>
+          </div>
+
+          <div class="grid two">
+            <label>
+              <span>Anthropic API Key</span>
+              <input type="password" name="anthropic_api_key" placeholder="ANTHROPIC_API_KEY" />
+            </label>
+            <label>
+              <span>Gemini API Key</span>
+              <input type="password" name="google_api_key" placeholder="GOOGLE_API_KEY" />
+            </label>
+          </div>
+
+          <div class="toggles">
+            <label><input type="checkbox" name="allow_remote_inference" /> allow_remote_inference</label>
+            <label><input type="checkbox" name="skip_model_check" /> skip_model_check</label>
+          </div>
+
+          <button class="btn btn-primary" type="submit">Start Experiment</button>
+        </form>
+
+        <h3>Run Jobs</h3>
+        <div id="jobs-list" class="stack"></div>
+
+        <h3>Realtime Job Output</h3>
+        <p id="job-output-head" class="sub">Select a job to view live logs.</p>
+        <pre id="job-output" class="code job-output"></pre>
+      </section>
+
+      <section class="panel panel-data">
+        <div class="section-head">
+          <h2>Experiment Runs</h2>
+          <button id="reload-runs" class="btn btn-ghost">Reload Runs</button>
+        </div>
+        <div id="runs-list" class="stack"></div>
+
+        <div id="run-detail" class="run-detail hidden">
+          <h3 id="run-title">Run Detail</h3>
+          <div class="metric-grid" id="summary-cards"></div>
+
+          <h4>Uplift (full_dct over baselines)</h4>
+          <div id="uplift-table"></div>
+
+          <h4>Method Summaries</h4>
+          <div id="methods-table"></div>
+
+          <h4>Plots</h4>
+          <div id="plots-grid" class="plots-grid"></div>
+
+          <h4>Artifacts</h4>
+          <div id="artifacts-list" class="artifact-list"></div>
+        </div>
+      </section>
+
+      <section class="panel panel-knowledge">
+        <h2>Knowledge</h2>
+        <p class="sub">README and active experiment config templates in one place.</p>
+
+        <h3>Quickstart Config</h3>
+        <pre id="quick-config" class="code"></pre>
+
+        <h3>Full Experiment Config</h3>
+        <pre id="full-config" class="code"></pre>
+
+        <h3>README</h3>
+        <pre id="readme-content" class="code readme"></pre>
+      </section>
+    </main>
+
+    <template id="job-item-template">
+      <article class="item">
+        <div class="item-top">
+          <strong class="name"></strong>
+          <span class="status"></span>
+        </div>
+        <p class="meta"></p>
+      </article>
+    </template>
+
+    <template id="run-item-template">
+      <button class="item run-item" type="button">
+        <div class="item-top">
+          <strong class="name"></strong>
+          <span class="meta-time"></span>
+        </div>
+        <p class="meta"></p>
+      </button>
+    </template>
+
+    <script src="/ui-assets/app.js"></script>
+  </body>
+</html>

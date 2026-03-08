@@ -37,6 +37,9 @@ dct/reporting/__init__.py
 dct/reporting/metrics.py
 dct/reporting/plots.py
 dct/reporting/writer.py
+dct/ui/app.js
+dct/ui/index.html
+dct/ui/styles.css
 dct_local.egg-info/PKG-INFO
 dct_local.egg-info/SOURCES.txt
 dct_local.egg-info/dependency_links.txt
@@ -44,6 +47,7 @@ dct_local.egg-info/entry_points.txt
 dct_local.egg-info/requires.txt
 dct_local.egg-info/top_level.txt
 tests/test_access_policy.py
+tests/test_api_ui.py
 tests/test_benchmarks.py
 tests/test_collision.py
 tests/test_orchestrator.py

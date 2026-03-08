@@ -76,9 +76,16 @@ class OpenAICompatibleProvider:
         try:
             return try_parse_json(text)
         except Exception as exc:  # noqa: BLE001
+            repaired = self._repair_json_text(text=text, max_tokens=max_tokens)
+            if repaired is not None:
+                try:
+                    return try_parse_json(repaired)
+                except Exception:  # noqa: BLE001
+                    pass
             raise ModelUnavailableError(
                 "Model response was not valid JSON. "
                 "Adjust prompts/model or lower temperature. "
+                "If using DeepSeek reasoning models, prefer deepseek-chat or reduce temperature to 0.1. "
                 f"Raw snippet: {text[:300]}"
             ) from exc
 
@@ -87,6 +94,37 @@ class OpenAICompatibleProvider:
             "Authorization": f"Bearer {self.settings.openai_api_key}",
             "Content-Type": "application/json",
         }
+
+    def _repair_json_text(self, text: str, max_tokens: int) -> str | None:
+        repair_payload = {
+            "model": self.settings.model_name,
+            "temperature": 0.0,
+            "max_tokens": max(300, min(900, max_tokens)),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You repair malformed JSON. "
+                        "Return ONLY one valid JSON object. No markdown, no commentary."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Fix the following model output into a valid JSON object without changing field intent:\\n\\n"
+                        f"{text[:4000]}"
+                    ),
+                },
+            ],
+        }
+        url = f"{self.base_url}/chat/completions"
+        try:
+            resp = self.client.post(url, headers=self._headers(), json=repair_payload)
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+        except Exception:  # noqa: BLE001
+            return None
 
 
 class AnthropicProvider:
@@ -141,6 +179,12 @@ class AnthropicProvider:
         try:
             return try_parse_json(text)
         except Exception as exc:  # noqa: BLE001
+            repaired = self._repair_json_text(text=text, max_tokens=max_tokens)
+            if repaired is not None:
+                try:
+                    return try_parse_json(repaired)
+                except Exception:  # noqa: BLE001
+                    pass
             raise ModelUnavailableError(
                 "Anthropic response was not valid JSON. "
                 "Adjust prompts/model or lower temperature. "
@@ -153,6 +197,33 @@ class AnthropicProvider:
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         }
+
+    def _repair_json_text(self, text: str, max_tokens: int) -> str | None:
+        payload = {
+            "model": self.settings.model_name,
+            "temperature": 0.0,
+            "max_tokens": max(300, min(900, max_tokens)),
+            "system": "You repair malformed JSON and output only one valid JSON object.",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Fix this into one valid JSON object without changing field intent:\\n\\n"
+                        f"{text[:4000]}"
+                    ),
+                }
+            ],
+        }
+        url = f"{self.base_url}/v1/messages"
+        try:
+            response = self.client.post(url, headers=self._headers(), json=payload)
+            response.raise_for_status()
+            data = response.json()
+            parts = data.get("content", [])
+            repaired = "\n".join(item.get("text", "") for item in parts if item.get("type") == "text")
+            return repaired if repaired.strip() else None
+        except Exception:  # noqa: BLE001
+            return None
 
 
 class GeminiProvider:
@@ -210,11 +281,49 @@ class GeminiProvider:
         try:
             return try_parse_json(text)
         except Exception as exc:  # noqa: BLE001
+            repaired = self._repair_json_text(text=text, max_tokens=max_tokens)
+            if repaired is not None:
+                try:
+                    return try_parse_json(repaired)
+                except Exception:  # noqa: BLE001
+                    pass
             raise ModelUnavailableError(
                 "Gemini response was not valid JSON. "
                 "Adjust prompts/model or lower temperature. "
                 f"Raw snippet: {text[:300]}"
             ) from exc
+
+    def _repair_json_text(self, text: str, max_tokens: int) -> str | None:
+        model = self.settings.model_name
+        url = f"{self.base_url}/v1beta/models/{model}:generateContent?key={self.settings.google_api_key}"
+        payload = {
+            "systemInstruction": {
+                "parts": [{"text": "Repair malformed JSON and return one valid JSON object only."}],
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": (
+                                "Fix this into one valid JSON object without changing field intent:\\n\\n"
+                                f"{text[:4000]}"
+                            )
+                        }
+                    ],
+                }
+            ],
+            "generationConfig": {"temperature": 0.0, "maxOutputTokens": max(300, min(900, max_tokens))},
+        }
+        try:
+            response = self.client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            parts = data["candidates"][0]["content"]["parts"]
+            repaired = "\n".join(p.get("text", "") for p in parts if "text" in p)
+            return repaired if repaired.strip() else None
+        except Exception:  # noqa: BLE001
+            return None
 
 
 def build_provider(settings: RuntimeSettings) -> LLMProvider:

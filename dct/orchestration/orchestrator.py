@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
+from typing import Any, Callable
 
 from dct.agents.collision_engine import CollisionEngine
 from dct.agents.trajectory_a import TrajectoryAAgent
@@ -41,17 +42,42 @@ class DCTOrchestrator:
         self.collision_engine = CollisionEngine(provider)
         self.verifier = Verifier(provider)
 
-    def run(self, config: ExperimentConfig) -> tuple[ExperimentSummary, Path]:
+    def run(
+        self,
+        config: ExperimentConfig,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> tuple[ExperimentSummary, Path]:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         run_name = f"{config.name}_{timestamp}"
         run_output_dir = Path(config.output_dir) / run_name
         run_output_dir.mkdir(parents=True, exist_ok=True)
+
+        self._emit(
+            progress_callback,
+            {
+                "type": "run_started",
+                "run_name": run_name,
+                "config_name": config.name,
+                "baselines": config.baselines,
+                "trials": config.trials,
+                "rounds": config.rounds,
+            },
+        )
 
         method_summaries = []
         candidate_logs: list[CandidateLogRecord] = []
 
         for method in config.baselines:
             for trial_index in range(config.trials):
+                self._emit(
+                    progress_callback,
+                    {
+                        "type": "trial_started",
+                        "run_name": run_name,
+                        "method": method,
+                        "trial_index": trial_index,
+                    },
+                )
                 run_id = f"{run_name}_{method}_trial{trial_index}"
                 self.memory.create_run(
                     run_id=run_id,
@@ -64,8 +90,10 @@ class DCTOrchestrator:
                     method=method,
                     trial_index=trial_index,
                     config=config,
+                    progress_callback=progress_callback,
                 )
                 candidate_logs.extend(trial_logs)
+                accepted_count = len([r for r in trial_logs if r.accepted])
                 method_summaries.append(
                     compute_method_summary(
                         method=method,
@@ -73,6 +101,17 @@ class DCTOrchestrator:
                         round_summaries=round_summaries,
                         candidate_logs=trial_logs,
                     )
+                )
+                self._emit(
+                    progress_callback,
+                    {
+                        "type": "trial_completed",
+                        "run_name": run_name,
+                        "method": method,
+                        "trial_index": trial_index,
+                        "candidate_count": len(trial_logs),
+                        "accepted_count": accepted_count,
+                    },
                 )
 
         summary = ExperimentSummary(
@@ -89,6 +128,16 @@ class DCTOrchestrator:
         writer.write_summary_json(summary)
         generate_plots(method_summaries, candidate_logs, run_output_dir)
 
+        self._emit(
+            progress_callback,
+            {
+                "type": "run_completed",
+                "run_name": run_name,
+                "run_output_dir": str(run_output_dir),
+                "method_summary_count": len(method_summaries),
+            },
+        )
+
         return summary, run_output_dir
 
     def _run_single_method_trial(
@@ -97,6 +146,7 @@ class DCTOrchestrator:
         method: str,
         trial_index: int,
         config: ExperimentConfig,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[list[RoundSummary], list[CandidateLogRecord]]:
         round_summaries: list[RoundSummary] = []
         candidate_logs: list[CandidateLogRecord] = []
@@ -109,6 +159,18 @@ class DCTOrchestrator:
         for round_index in range(config.rounds):
             for family_index, family in enumerate(config.benchmark_families):
                 task_seed = config.seed + (trial_index * 10000) + (round_index * 100) + family_index
+                self._emit(
+                    progress_callback,
+                    {
+                        "type": "task_started",
+                        "run_id": run_id,
+                        "method": method,
+                        "trial_index": trial_index,
+                        "round_index": round_index,
+                        "family": family,
+                        "task_seed": task_seed,
+                    },
+                )
                 task = self.registry.generate(
                     family=family,
                     seed=task_seed,
@@ -193,6 +255,23 @@ class DCTOrchestrator:
                         average_novelty=avg_novelty,
                         time_to_valid_discovery=first_valid_round,
                     )
+                )
+                self._emit(
+                    progress_callback,
+                    {
+                        "type": "task_completed",
+                        "run_id": run_id,
+                        "method": method,
+                        "trial_index": trial_index,
+                        "round_index": round_index,
+                        "family": family,
+                        "task_id": task.task_id,
+                        "candidate_count": len(round_records),
+                        "accepted_count": len(accepted_records),
+                        "validity_rate": validity_rate,
+                        "top_heldout_accuracy": top_accuracy,
+                        "average_novelty": avg_novelty,
+                    },
                 )
 
         return round_summaries, candidate_logs
@@ -356,3 +435,12 @@ class DCTOrchestrator:
         expr_tokens = token_set(expression)
         sims = [jaccard_similarity(expr_tokens, token_set(mem_expr)) for mem_expr in memory_expressions]
         return max(0.0, min(1.0, 1.0 - max(sims)))
+
+    @staticmethod
+    def _emit(callback: Callable[[dict[str, Any]], None] | None, payload: dict[str, Any]) -> None:
+        if callback is None:
+            return
+        try:
+            callback(payload)
+        except Exception:  # noqa: BLE001
+            return
