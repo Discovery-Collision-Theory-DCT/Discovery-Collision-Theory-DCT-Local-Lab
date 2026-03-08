@@ -31,6 +31,8 @@ class RunRequest(BaseModel):
     model_access_mode: str | None = None
     model_name: str | None = None
     model_temperature: float | None = None
+    use_reasoner: bool = False
+    reasoner_model_name: str | None = None
     allow_remote_inference: bool = False
 
     openai_base_url: str | None = None
@@ -66,6 +68,7 @@ def create_app(output_root: Path) -> FastAPI:
 
     jobs: dict[str, RunJob] = {}
     jobs_lock = threading.Lock()
+    model_output_max_chars = 4000
 
     def _default_config_for_mode(mode: str) -> Path:
         if mode == "quickstart":
@@ -84,6 +87,8 @@ def create_app(output_root: Path) -> FastAPI:
             overrides["model_name"] = req.model_name
         if req.model_temperature is not None:
             overrides["model_temperature"] = req.model_temperature
+        if req.use_reasoner:
+            overrides["model_name"] = req.reasoner_model_name or "deepseek-reasoner"
         if req.allow_remote_inference:
             overrides["allow_remote_inference"] = True
 
@@ -128,6 +133,22 @@ def create_app(output_root: Path) -> FastAPI:
             payload.update(kwargs)
             payload["updated_at"] = utc_now()
             jobs[job_id] = RunJob.model_validate(payload)
+
+    def _append_model_output_log(job_id: str, event: dict) -> None:
+        raw_text = str(event.get("text", ""))
+        text = raw_text[:model_output_max_chars]
+        if len(raw_text) > model_output_max_chars:
+            text += "\n...[truncated]"
+
+        event_payload = dict(event)
+        event_payload["text"] = text
+
+        provider = event_payload.get("provider", "unknown")
+        model = event_payload.get("model", "unknown")
+        phase = event_payload.get("phase", "primary")
+        agent = event_payload.get("agent_hint", "agent")
+        message = f"{provider}/{model} [{phase}] {agent}"
+        _append_job_log(job_id, message=message, level="model", event=event_payload)
 
     def _append_job_log(
         job_id: str,
@@ -212,8 +233,12 @@ def create_app(output_root: Path) -> FastAPI:
                     f"temperature={settings.model_temperature} access_mode={settings.model_access_mode}"
                 ),
             )
+            if req.use_reasoner:
+                _append_job_log(job_id, f"Reasoner enabled: model={settings.model_name}")
 
             provider = build_provider(settings)
+            if hasattr(provider, "set_debug_callback"):
+                provider.set_debug_callback(lambda event: _append_model_output_log(job_id, event))
             if settings.dct_check_model_on_start and not req.skip_model_check:
                 ok, message = provider.check_health()
                 if not ok:

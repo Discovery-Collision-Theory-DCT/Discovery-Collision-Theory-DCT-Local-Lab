@@ -82,6 +82,17 @@
             </label>
           </div>
 
+          <div class="grid two">
+            <label>
+              <span>Reasoner Model Name</span>
+              <input type="text" name="reasoner_model_name" placeholder="deepseek-reasoner" />
+            </label>
+            <label class="checkbox-wrap">
+              <span>Reasoner Switch</span>
+              <span><input type="checkbox" name="use_reasoner" /> use_reasoner</span>
+            </label>
+          </div>
+
           <label>
             <span>Config Path (optional)</span>
             <input type="text" name="config_path" placeholder="config/quickstart.yaml" />
@@ -119,34 +130,43 @@
 
         <h3>Run Jobs</h3>
         <div id="jobs-list" class="stack"></div>
-
-        <h3>Realtime Job Output</h3>
-        <p id="job-output-head" class="sub">Select a job to view live logs.</p>
-        <pre id="job-output" class="code job-output"></pre>
       </section>
 
       <section class="panel panel-data">
-        <div class="section-head">
-          <h2>Experiment Runs</h2>
-          <button id="reload-runs" class="btn btn-ghost">Reload Runs</button>
+        <div class="tabs">
+          <button id="tab-runs-btn" class="tab-btn active" data-tab="runs" type="button">Runs & Metrics</button>
+          <button id="tab-stream-btn" class="tab-btn" data-tab="stream" type="button">Realtime Model Stream</button>
         </div>
-        <div id="runs-list" class="stack"></div>
 
-        <div id="run-detail" class="run-detail hidden">
-          <h3 id="run-title">Run Detail</h3>
-          <div class="metric-grid" id="summary-cards"></div>
+        <div id="tab-runs" class="tab-panel active">
+          <div class="section-head">
+            <h2>Experiment Runs</h2>
+            <button id="reload-runs" class="btn btn-ghost">Reload Runs</button>
+          </div>
+          <div id="runs-list" class="stack"></div>
 
-          <h4>Uplift (full_dct over baselines)</h4>
-          <div id="uplift-table"></div>
+          <div id="run-detail" class="run-detail hidden">
+            <h3 id="run-title">Run Detail</h3>
+            <div class="metric-grid" id="summary-cards"></div>
 
-          <h4>Method Summaries</h4>
-          <div id="methods-table"></div>
+            <h4>Uplift (full_dct over baselines)</h4>
+            <div id="uplift-table"></div>
 
-          <h4>Plots</h4>
-          <div id="plots-grid" class="plots-grid"></div>
+            <h4>Method Summaries</h4>
+            <div id="methods-table"></div>
 
-          <h4>Artifacts</h4>
-          <div id="artifacts-list" class="artifact-list"></div>
+            <h4>Plots</h4>
+            <div id="plots-grid" class="plots-grid"></div>
+
+            <h4>Artifacts</h4>
+            <div id="artifacts-list" class="artifact-list"></div>
+          </div>
+        </div>
+
+        <div id="tab-stream" class="tab-panel">
+          <h2>Realtime Model Output</h2>
+          <p id="stream-output-head" class="sub">Select a job to view live model outputs.</p>
+          <pre id="stream-output" class="code stream-output"></pre>
         </div>
       </section>
 

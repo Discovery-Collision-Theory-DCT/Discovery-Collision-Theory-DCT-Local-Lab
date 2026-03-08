@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Callable, Protocol
 
 import httpx
 
@@ -19,12 +19,19 @@ class LLMProvider(Protocol):
     def generate_json(self, system_prompt: str, user_prompt: str, max_tokens: int = 800) -> dict:
         ...
 
+    def set_debug_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        ...
+
 
 class OpenAICompatibleProvider:
     def __init__(self, settings: RuntimeSettings):
         self.settings = settings
         self.base_url = settings.openai_base_url.rstrip("/")
         self.client = httpx.Client(timeout=settings.model_timeout_seconds)
+        self.debug_callback: Callable[[dict[str, Any]], None] | None = None
+
+    def set_debug_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        self.debug_callback = callback
 
     def check_health(self) -> tuple[bool, str]:
         models_url = f"{self.base_url}/models"
@@ -72,12 +79,14 @@ class OpenAICompatibleProvider:
             text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as exc:
             raise ModelUnavailableError(f"Unexpected model response shape: {data}") from exc
+        self._emit_output(system_prompt=system_prompt, text=text, phase="primary")
 
         try:
             return try_parse_json(text)
         except Exception as exc:  # noqa: BLE001
             repaired = self._repair_json_text(text=text, max_tokens=max_tokens)
             if repaired is not None:
+                self._emit_output(system_prompt=system_prompt, text=repaired, phase="repair")
                 try:
                     return try_parse_json(repaired)
                 except Exception:  # noqa: BLE001
@@ -126,12 +135,34 @@ class OpenAICompatibleProvider:
         except Exception:  # noqa: BLE001
             return None
 
+    def _emit_output(self, system_prompt: str, text: str, phase: str) -> None:
+        if self.debug_callback is None:
+            return
+        try:
+            agent_hint = (system_prompt.strip().splitlines()[0] if system_prompt else "unknown")[:120]
+            self.debug_callback(
+                {
+                    "type": "model_output",
+                    "provider": self.settings.normalized_provider(),
+                    "model": self.settings.model_name,
+                    "phase": phase,
+                    "agent_hint": agent_hint,
+                    "text": text,
+                }
+            )
+        except Exception:  # noqa: BLE001
+            return
+
 
 class AnthropicProvider:
     def __init__(self, settings: RuntimeSettings):
         self.settings = settings
         self.base_url = settings.anthropic_base_url.rstrip("/")
         self.client = httpx.Client(timeout=settings.model_timeout_seconds)
+        self.debug_callback: Callable[[dict[str, Any]], None] | None = None
+
+    def set_debug_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        self.debug_callback = callback
 
     def check_health(self) -> tuple[bool, str]:
         models_url = f"{self.base_url}/v1/models"
@@ -175,12 +206,14 @@ class AnthropicProvider:
                 raise KeyError("No text content")
         except Exception as exc:  # noqa: BLE001
             raise ModelUnavailableError(f"Unexpected Anthropic response shape: {data}") from exc
+        self._emit_output(system_prompt=system_prompt, text=text, phase="primary")
 
         try:
             return try_parse_json(text)
         except Exception as exc:  # noqa: BLE001
             repaired = self._repair_json_text(text=text, max_tokens=max_tokens)
             if repaired is not None:
+                self._emit_output(system_prompt=system_prompt, text=repaired, phase="repair")
                 try:
                     return try_parse_json(repaired)
                 except Exception:  # noqa: BLE001
@@ -225,12 +258,34 @@ class AnthropicProvider:
         except Exception:  # noqa: BLE001
             return None
 
+    def _emit_output(self, system_prompt: str, text: str, phase: str) -> None:
+        if self.debug_callback is None:
+            return
+        try:
+            agent_hint = (system_prompt.strip().splitlines()[0] if system_prompt else "unknown")[:120]
+            self.debug_callback(
+                {
+                    "type": "model_output",
+                    "provider": self.settings.normalized_provider(),
+                    "model": self.settings.model_name,
+                    "phase": phase,
+                    "agent_hint": agent_hint,
+                    "text": text,
+                }
+            )
+        except Exception:  # noqa: BLE001
+            return
+
 
 class GeminiProvider:
     def __init__(self, settings: RuntimeSettings):
         self.settings = settings
         self.base_url = settings.google_base_url.rstrip("/")
         self.client = httpx.Client(timeout=settings.model_timeout_seconds)
+        self.debug_callback: Callable[[dict[str, Any]], None] | None = None
+
+    def set_debug_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        self.debug_callback = callback
 
     def check_health(self) -> tuple[bool, str]:
         url = f"{self.base_url}/v1beta/models?key={self.settings.google_api_key}"
@@ -277,12 +332,14 @@ class GeminiProvider:
                 raise KeyError("No text in Gemini response")
         except Exception as exc:  # noqa: BLE001
             raise ModelUnavailableError(f"Unexpected Gemini response shape: {data}") from exc
+        self._emit_output(system_prompt=system_prompt, text=text, phase="primary")
 
         try:
             return try_parse_json(text)
         except Exception as exc:  # noqa: BLE001
             repaired = self._repair_json_text(text=text, max_tokens=max_tokens)
             if repaired is not None:
+                self._emit_output(system_prompt=system_prompt, text=repaired, phase="repair")
                 try:
                     return try_parse_json(repaired)
                 except Exception:  # noqa: BLE001
@@ -324,6 +381,24 @@ class GeminiProvider:
             return repaired if repaired.strip() else None
         except Exception:  # noqa: BLE001
             return None
+
+    def _emit_output(self, system_prompt: str, text: str, phase: str) -> None:
+        if self.debug_callback is None:
+            return
+        try:
+            agent_hint = (system_prompt.strip().splitlines()[0] if system_prompt else "unknown")[:120]
+            self.debug_callback(
+                {
+                    "type": "model_output",
+                    "provider": self.settings.normalized_provider(),
+                    "model": self.settings.model_name,
+                    "phase": phase,
+                    "agent_hint": agent_hint,
+                    "text": text,
+                }
+            )
+        except Exception:  # noqa: BLE001
+            return
 
 
 def build_provider(settings: RuntimeSettings) -> LLMProvider:

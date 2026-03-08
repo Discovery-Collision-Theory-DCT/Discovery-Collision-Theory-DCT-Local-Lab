@@ -26,6 +26,7 @@ def test_ui_and_run_listing(tmp_path: Path):
     index_resp = client.get("/")
     assert index_resp.status_code == 200
     assert "DCT Control Surface" in index_resp.text
+    assert "Realtime Model Stream" in index_resp.text
 
     runs_resp = client.get("/api/runs")
     assert runs_resp.status_code == 200
@@ -58,6 +59,8 @@ def test_run_job_tracks_temperature_and_realtime_logs(tmp_path: Path):
             "model_access_mode": "local",
             "model_name": "dummy-model",
             "model_temperature": 0.11,
+            "use_reasoner": True,
+            "reasoner_model_name": "deepseek-reasoner",
         },
     )
     assert resp.status_code == 200
@@ -74,5 +77,7 @@ def test_run_job_tracks_temperature_and_realtime_logs(tmp_path: Path):
 
     assert final is not None
     assert final["request"]["model_temperature"] == 0.11
+    assert final["request"]["use_reasoner"] is True
+    assert final["request"]["reasoner_model_name"] == "deepseek-reasoner"
     assert isinstance(final.get("logs", []), list)
     assert len(final["logs"]) >= 1

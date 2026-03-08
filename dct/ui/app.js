@@ -14,11 +14,14 @@ const els = {
   healthBadge: document.getElementById("health-badge"),
   refreshAll: document.getElementById("refresh-all"),
   runForm: document.getElementById("run-form"),
+
   jobsList: document.getElementById("jobs-list"),
-  jobOutputHead: document.getElementById("job-output-head"),
-  jobOutput: document.getElementById("job-output"),
+  jobTemplate: document.getElementById("job-item-template"),
+
   runsList: document.getElementById("runs-list"),
+  runTemplate: document.getElementById("run-item-template"),
   reloadRuns: document.getElementById("reload-runs"),
+
   runDetail: document.getElementById("run-detail"),
   runTitle: document.getElementById("run-title"),
   summaryCards: document.getElementById("summary-cards"),
@@ -26,16 +29,34 @@ const els = {
   methodsTable: document.getElementById("methods-table"),
   plotsGrid: document.getElementById("plots-grid"),
   artifactsList: document.getElementById("artifacts-list"),
+
+  tabRunsBtn: document.getElementById("tab-runs-btn"),
+  tabStreamBtn: document.getElementById("tab-stream-btn"),
+  tabRuns: document.getElementById("tab-runs"),
+  tabStream: document.getElementById("tab-stream"),
+
+  streamOutputHead: document.getElementById("stream-output-head"),
+  streamOutput: document.getElementById("stream-output"),
+
   quickConfig: document.getElementById("quick-config"),
   fullConfig: document.getElementById("full-config"),
   readmeContent: document.getElementById("readme-content"),
-  jobTemplate: document.getElementById("job-item-template"),
-  runTemplate: document.getElementById("run-item-template"),
 };
 
 let currentRunName = null;
 let currentJobId = null;
 let jobsPollHandle = null;
+let activeTab = "runs";
+
+function hasElement(el) {
+  return el !== null && el !== undefined;
+}
+
+function setText(el, text) {
+  if (hasElement(el)) {
+    el.textContent = text;
+  }
+}
 
 function toNumber(value) {
   if (typeof value !== "number") return null;
@@ -48,6 +69,15 @@ function formatNumber(value) {
   return Number(value).toFixed(4);
 }
 
+function switchTab(name) {
+  activeTab = name;
+
+  if (hasElement(els.tabRunsBtn)) els.tabRunsBtn.classList.toggle("active", name === "runs");
+  if (hasElement(els.tabStreamBtn)) els.tabStreamBtn.classList.toggle("active", name === "stream");
+  if (hasElement(els.tabRuns)) els.tabRuns.classList.toggle("active", name === "runs");
+  if (hasElement(els.tabStream)) els.tabStream.classList.toggle("active", name === "stream");
+}
+
 function normalizePayload(formData) {
   const payload = {};
   for (const [key, value] of formData.entries()) {
@@ -57,6 +87,7 @@ function normalizePayload(formData) {
 
   payload.allow_remote_inference = formData.get("allow_remote_inference") === "on";
   payload.skip_model_check = formData.get("skip_model_check") === "on";
+  payload.use_reasoner = formData.get("use_reasoner") === "on";
 
   const tempRaw = formData.get("model_temperature");
   if (typeof tempRaw === "string" && tempRaw.trim() !== "") {
@@ -67,11 +98,13 @@ function normalizePayload(formData) {
   if (!payload.config_path) delete payload.config_path;
   if (!payload.output_dir) delete payload.output_dir;
   if (!payload.model_name) delete payload.model_name;
+  if (!payload.reasoner_model_name) delete payload.reasoner_model_name;
 
   return payload;
 }
 
 function setHealth(statusText, ok = false) {
+  if (!hasElement(els.healthBadge)) return;
   els.healthBadge.textContent = statusText;
   els.healthBadge.style.color = ok ? "#6efac9" : "#ffb97a";
 }
@@ -85,10 +118,12 @@ async function loadHealth() {
   }
 }
 
-function renderJobOutput(job) {
+function renderStreamOutput(job) {
+  if (!hasElement(els.streamOutputHead) || !hasElement(els.streamOutput)) return;
+
   if (!job) {
-    els.jobOutputHead.textContent = "Select a job to view live logs.";
-    els.jobOutput.textContent = "";
+    setText(els.streamOutputHead, "Select a job to view live model outputs.");
+    setText(els.streamOutput, "");
     return;
   }
 
@@ -99,62 +134,89 @@ function renderJobOutput(job) {
     `provider=${req.model_provider || "(env/default)"}`,
     `model=${req.model_name || "(env/default)"}`,
     `temp=${req.model_temperature ?? "(env/default)"}`,
+    `reasoner=${req.use_reasoner ? "on" : "off"}`,
   ];
   if (job.run_name) headBits.push(`run=${job.run_name}`);
-  els.jobOutputHead.textContent = headBits.join(" | ");
+  setText(els.streamOutputHead, headBits.join(" | "));
 
   const logs = Array.isArray(job.logs) ? job.logs : [];
   if (!logs.length) {
-    els.jobOutput.textContent = "No logs yet...";
+    setText(els.streamOutput, "No logs yet...");
     return;
   }
 
-  const lines = logs.map((log) => {
+  const modelLogs = logs.filter((l) => l.level === "model" && l.event && l.event.type === "model_output");
+  const targetLogs = modelLogs.length ? modelLogs : logs;
+
+  const blocks = targetLogs.map((log) => {
     const ts = log.time ? new Date(log.time).toLocaleTimeString() : "--:--:--";
-    const lvl = (log.level || "info").toUpperCase();
-    return `[${ts}] ${lvl} ${log.message || ""}`;
+    const ev = log.event || {};
+    if (ev.type === "model_output") {
+      const provider = ev.provider || "provider";
+      const model = ev.model || "model";
+      const phase = ev.phase || "primary";
+      const agent = ev.agent_hint || "agent";
+      const text = typeof ev.text === "string" ? ev.text : log.message || "";
+      return `[${ts}] ${provider}/${model} [${phase}] ${agent}\n${text}`;
+    }
+    return `[${ts}] ${(log.level || "info").toUpperCase()} ${log.message || ""}`;
   });
 
   if (job.error) {
-    lines.push(`\n[ERROR] ${job.error}`);
+    blocks.push(`[ERROR] ${job.error}`);
   }
 
-  els.jobOutput.textContent = lines.join("\n");
-  els.jobOutput.scrollTop = els.jobOutput.scrollHeight;
+  setText(els.streamOutput, blocks.join("\n\n------------------------------\n\n"));
+  els.streamOutput.scrollTop = els.streamOutput.scrollHeight;
 }
 
 function renderJobs(jobs) {
+  if (!hasElement(els.jobsList)) return;
   els.jobsList.innerHTML = "";
+
   if (!jobs.length) {
     els.jobsList.innerHTML = '<p class="sub">No run jobs yet.</p>';
-    renderJobOutput(null);
+    renderStreamOutput(null);
     return;
   }
 
   for (const job of jobs) {
-    const node = els.jobTemplate.content.firstElementChild.cloneNode(true);
-    node.querySelector(".name").textContent = job.job_id;
+    let node = null;
+    if (hasElement(els.jobTemplate) && els.jobTemplate.content && els.jobTemplate.content.firstElementChild) {
+      node = els.jobTemplate.content.firstElementChild.cloneNode(true);
+    } else {
+      node = document.createElement("article");
+      node.className = "item";
+      node.innerHTML = '<div class="item-top"><strong class="name"></strong><span class="status"></span></div><p class="meta"></p>';
+    }
 
-    const statusEl = node.querySelector(".status-chip");
-    statusEl.textContent = job.status;
-    statusEl.classList.add(job.status);
+    setText(node.querySelector(".name"), job.job_id);
+
+    const statusEl = node.querySelector(".status") || node.querySelector(".status-chip");
+    if (hasElement(statusEl)) {
+      statusEl.textContent = job.status;
+      statusEl.classList.add(job.status);
+    }
 
     const meta = [];
     if (job.run_name) meta.push(`run=${job.run_name}`);
     if (job.error) meta.push(`error=${job.error}`);
+    const req = job.request || {};
+    if (req.use_reasoner) meta.push(`reasoner=${req.reasoner_model_name || "on"}`);
+
     const lastMessage = Array.isArray(job.logs) && job.logs.length ? job.logs[job.logs.length - 1].message : null;
     if (lastMessage) meta.push(`last=${lastMessage}`);
     meta.push(`updated=${new Date(job.updated_at).toLocaleString()}`);
-    node.querySelector(".meta").textContent = meta.join(" | ");
 
-    if (job.job_id === currentJobId) {
-      node.classList.add("selected");
-    }
+    setText(node.querySelector(".meta"), meta.join(" | "));
+
+    if (job.job_id === currentJobId) node.classList.add("selected");
 
     node.addEventListener("click", () => {
       currentJobId = job.job_id;
       renderJobs(jobs);
-      renderJobOutput(job);
+      renderStreamOutput(job);
+      switchTab("stream");
       if (job.run_name) {
         currentRunName = job.run_name;
         loadRunDetail(job.run_name);
@@ -170,12 +232,10 @@ async function loadJobs() {
     const jobs = await api("/api/jobs");
     renderJobs(jobs);
 
-    if (!currentJobId && jobs.length) {
-      currentJobId = jobs[0].job_id;
-    }
+    if (!currentJobId && jobs.length) currentJobId = jobs[0].job_id;
 
     const selected = jobs.find((j) => j.job_id === currentJobId) || jobs[0] || null;
-    renderJobOutput(selected);
+    renderStreamOutput(selected);
 
     if (selected?.run_name && selected.status === "completed" && selected.run_name !== currentRunName) {
       currentRunName = selected.run_name;
@@ -183,25 +243,39 @@ async function loadJobs() {
       await loadRuns();
     }
   } catch (err) {
-    els.jobsList.innerHTML = `<p class="sub">Failed to load jobs: ${err.message}</p>`;
+    if (hasElement(els.jobsList)) {
+      els.jobsList.innerHTML = `<p class="sub">Failed to load jobs: ${err.message}</p>`;
+    }
   }
 }
 
 function renderRuns(runs) {
+  if (!hasElement(els.runsList)) return;
   els.runsList.innerHTML = "";
+
   if (!runs.length) {
     els.runsList.innerHTML = '<p class="sub">No runs found in output root yet.</p>';
     return;
   }
 
   for (const run of runs) {
-    const node = els.runTemplate.content.firstElementChild.cloneNode(true);
-    node.querySelector(".name").textContent = run.run_name;
-    node.querySelector(".meta-time").textContent = new Date(run.updated_at).toLocaleString();
-    node.querySelector(".meta").textContent = run.run_dir;
+    let node = null;
+    if (hasElement(els.runTemplate) && els.runTemplate.content && els.runTemplate.content.firstElementChild) {
+      node = els.runTemplate.content.firstElementChild.cloneNode(true);
+    } else {
+      node = document.createElement("button");
+      node.type = "button";
+      node.className = "item run-item";
+      node.innerHTML = '<div class="item-top"><strong class="name"></strong><span class="meta-time"></span></div><p class="meta"></p>';
+    }
+
+    setText(node.querySelector(".name"), run.run_name);
+    setText(node.querySelector(".meta-time"), new Date(run.updated_at).toLocaleString());
+    setText(node.querySelector(".meta"), run.run_dir);
 
     node.addEventListener("click", () => {
       currentRunName = run.run_name;
+      switchTab("runs");
       loadRunDetail(run.run_name);
     });
 
@@ -219,7 +293,9 @@ async function loadRuns() {
       loadRunDetail(currentRunName);
     }
   } catch (err) {
-    els.runsList.innerHTML = `<p class="sub">Failed to load runs: ${err.message}</p>`;
+    if (hasElement(els.runsList)) {
+      els.runsList.innerHTML = `<p class="sub">Failed to load runs: ${err.message}</p>`;
+    }
   }
 }
 
@@ -231,6 +307,7 @@ function metricCard(label, value) {
 }
 
 function renderUpliftTable(uplift) {
+  if (!hasElement(els.upliftTable)) return;
   const baselines = Object.keys(uplift || {});
   if (!baselines.length) {
     els.upliftTable.innerHTML = '<p class="sub">No uplift data.</p>';
@@ -238,9 +315,7 @@ function renderUpliftTable(uplift) {
   }
 
   const metricSet = new Set();
-  for (const b of baselines) {
-    Object.keys(uplift[b] || {}).forEach((m) => metricSet.add(m));
-  }
+  for (const b of baselines) Object.keys(uplift[b] || {}).forEach((m) => metricSet.add(m));
   const metrics = Array.from(metricSet);
 
   const rows = baselines
@@ -261,14 +336,15 @@ function renderUpliftTable(uplift) {
 }
 
 function renderMethodsTable(methodSummaries) {
+  if (!hasElement(els.methodsTable)) return;
   if (!methodSummaries?.length) {
     els.methodsTable.innerHTML = '<p class="sub">No method summary data.</p>';
     return;
   }
 
   const rows = methodSummaries
-    .map((m) => {
-      return `
+    .map(
+      (m) => `
         <tr>
           <td>${m.method}</td>
           <td>${m.trial_index}</td>
@@ -280,8 +356,8 @@ function renderMethodsTable(methodSummaries) {
           <td>${formatNumber(toNumber(m.time_to_valid_discovery))}</td>
           <td>${formatNumber(toNumber(m.cumulative_improvement))}</td>
         </tr>
-      `;
-    })
+      `
+    )
     .join("");
 
   els.methodsTable.innerHTML = `
@@ -307,6 +383,8 @@ function renderMethodsTable(methodSummaries) {
 }
 
 function renderArtifacts(artifactsResponse) {
+  if (!hasElement(els.plotsGrid) || !hasElement(els.artifactsList)) return;
+
   const artifacts = artifactsResponse.artifacts || [];
 
   const plotFiles = artifacts.filter((a) => a.relative_path.includes("/plots/") && a.name.endsWith(".png"));
@@ -338,6 +416,7 @@ function renderArtifacts(artifactsResponse) {
 }
 
 async function loadRunDetail(runName) {
+  if (!hasElement(els.runDetail)) return;
   try {
     const [summary, artifacts] = await Promise.all([
       api(`/api/runs/${encodeURIComponent(runName)}`),
@@ -345,40 +424,43 @@ async function loadRunDetail(runName) {
     ]);
 
     els.runDetail.classList.remove("hidden");
-    els.runTitle.textContent = `Run Detail: ${summary.run_name}`;
+    setText(els.runTitle, `Run Detail: ${summary.run_name}`);
 
     const methodSummaries = summary.method_summaries || [];
     const methods = new Set(methodSummaries.map((m) => m.method));
     const trials = new Set(methodSummaries.map((m) => m.trial_index));
 
-    els.summaryCards.innerHTML = "";
-    els.summaryCards.appendChild(metricCard("Methods", methods.size));
-    els.summaryCards.appendChild(metricCard("Trials", trials.size));
-    els.summaryCards.appendChild(metricCard("Run Name", summary.run_name || "-"));
-    els.summaryCards.appendChild(metricCard("Output Dir", artifacts.run_dir || "-"));
+    if (hasElement(els.summaryCards)) {
+      els.summaryCards.innerHTML = "";
+      els.summaryCards.appendChild(metricCard("Methods", methods.size));
+      els.summaryCards.appendChild(metricCard("Trials", trials.size));
+      els.summaryCards.appendChild(metricCard("Run Name", summary.run_name || "-"));
+      els.summaryCards.appendChild(metricCard("Output Dir", artifacts.run_dir || "-"));
+    }
 
     renderUpliftTable(summary.uplift || {});
     renderMethodsTable(methodSummaries);
     renderArtifacts(artifacts);
   } catch (err) {
     els.runDetail.classList.remove("hidden");
-    els.runTitle.textContent = `Run Detail Error: ${runName}`;
-    els.summaryCards.innerHTML = `<p class="sub">${err.message}</p>`;
-    els.upliftTable.innerHTML = "";
-    els.methodsTable.innerHTML = "";
-    els.plotsGrid.innerHTML = "";
-    els.artifactsList.innerHTML = "";
+    setText(els.runTitle, `Run Detail Error: ${runName}`);
+    if (hasElement(els.summaryCards)) els.summaryCards.innerHTML = `<p class="sub">${err.message}</p>`;
+    if (hasElement(els.upliftTable)) els.upliftTable.innerHTML = "";
+    if (hasElement(els.methodsTable)) els.methodsTable.innerHTML = "";
+    if (hasElement(els.plotsGrid)) els.plotsGrid.innerHTML = "";
+    if (hasElement(els.artifactsList)) els.artifactsList.innerHTML = "";
   }
 }
 
 async function loadKnowledge() {
+  if (!hasElement(els.readmeContent) || !hasElement(els.quickConfig) || !hasElement(els.fullConfig)) return;
   try {
     const [readme, configs] = await Promise.all([api("/api/readme"), api("/api/configs")]);
-    els.readmeContent.textContent = readme.content || "";
-    els.quickConfig.textContent = configs.quickstart || "";
-    els.fullConfig.textContent = configs.full_experiment || "";
+    setText(els.readmeContent, readme.content || "");
+    setText(els.quickConfig, configs.quickstart || "");
+    setText(els.fullConfig, configs.full_experiment || "");
   } catch (err) {
-    els.readmeContent.textContent = `Failed to load docs: ${err.message}`;
+    setText(els.readmeContent, `Failed to load docs: ${err.message}`);
   }
 }
 
@@ -394,10 +476,9 @@ async function handleRunSubmit(event) {
     });
 
     currentJobId = job.job_id;
+    switchTab("stream");
     await loadJobs();
-    if (!jobsPollHandle) {
-      jobsPollHandle = setInterval(loadJobs, 3000);
-    }
+    if (!jobsPollHandle) jobsPollHandle = setInterval(loadJobs, 3000);
   } catch (err) {
     alert(`Failed to start run: ${err.message}`);
   }
@@ -408,15 +489,19 @@ async function refreshAll() {
 }
 
 function bindEvents() {
-  els.runForm.addEventListener("submit", handleRunSubmit);
-  els.refreshAll.addEventListener("click", refreshAll);
-  els.reloadRuns.addEventListener("click", loadRuns);
+  if (hasElement(els.runForm)) els.runForm.addEventListener("submit", handleRunSubmit);
+  if (hasElement(els.refreshAll)) els.refreshAll.addEventListener("click", refreshAll);
+  if (hasElement(els.reloadRuns)) els.reloadRuns.addEventListener("click", loadRuns);
+
+  if (hasElement(els.tabRunsBtn)) els.tabRunsBtn.addEventListener("click", () => switchTab("runs"));
+  if (hasElement(els.tabStreamBtn)) els.tabStreamBtn.addEventListener("click", () => switchTab("stream"));
 }
 
 async function init() {
   bindEvents();
+  switchTab(activeTab);
   await refreshAll();
-  jobsPollHandle = setInterval(loadJobs, 4000);
+  jobsPollHandle = setInterval(loadJobs, 3000);
 }
 
 init();

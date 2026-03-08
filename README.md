@@ -528,8 +528,9 @@ dct serve --output-root outputs --host 127.0.0.1 --port 8000
 - `http://127.0.0.1:8000/`
 
 UI 可覆盖：
-- 实验启动（provider/model/access mode/config/temp）
-- 运行作业状态（queued/running/completed/failed）与实时日志输出
+- 实验启动（provider/model/access mode/config/temp/use_reasoner）
+- 运行作业状态（queued/running/completed/failed）
+- 中间面板第二标签：Realtime Model Stream（实时模型原始输出）
 - run 详情（method summary、uplift、plots、artifacts）
 - README 与 quick/full 配置内容浏览
 
