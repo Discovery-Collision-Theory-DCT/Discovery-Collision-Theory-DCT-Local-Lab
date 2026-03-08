@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Protocol
 
 import httpx
@@ -73,27 +74,44 @@ class OpenAICompatibleProvider:
             raise ModelUnavailableError(message) from exc
 
         try:
-            text = self._extract_chat_content(data)
+            content_text, reasoning_text = self._extract_chat_texts(data)
         except (KeyError, IndexError, TypeError) as exc:
             raise ModelUnavailableError(f"Unexpected model response shape: {data}") from exc
-        self._emit_output(system_prompt=system_prompt, text=text, phase="primary")
+        primary_text = content_text.strip()
+        if primary_text:
+            self._emit_output(system_prompt=system_prompt, text=primary_text, phase="primary")
+        if reasoning_text.strip():
+            self._emit_output(system_prompt=system_prompt, text=reasoning_text, phase="reasoning")
 
-        try:
-            return try_parse_json(text)
-        except Exception as exc:  # noqa: BLE001
-            repaired = self._repair_json_text(text=text, max_tokens=max_tokens)
-            if repaired is not None:
-                self._emit_output(system_prompt=system_prompt, text=repaired, phase="repair")
-                try:
-                    return try_parse_json(repaired)
-                except Exception:  # noqa: BLE001
-                    pass
-            raise ModelUnavailableError(
-                "Model response was not valid JSON. "
-                "Adjust prompts/model or lower temperature. "
-                "If using DeepSeek reasoning models, prefer deepseek-chat or reduce temperature to 0.1. "
-                f"Raw snippet: {text[:300]}"
-            ) from exc
+        parse_candidates = []
+        if primary_text:
+            parse_candidates.append(primary_text)
+        if reasoning_text.strip() and reasoning_text.strip() != primary_text:
+            parse_candidates.append(reasoning_text.strip())
+
+        last_parse_exc: Exception | None = None
+        for candidate in parse_candidates:
+            try:
+                return try_parse_json(candidate)
+            except Exception as exc:  # noqa: BLE001
+                last_parse_exc = exc
+
+        repair_source = parse_candidates[0] if parse_candidates else json.dumps(data)[:4000]
+        repaired = self._repair_json_text(text=repair_source, max_tokens=max_tokens)
+        if repaired is not None:
+            self._emit_output(system_prompt=system_prompt, text=repaired, phase="repair")
+            try:
+                return try_parse_json(repaired)
+            except Exception as exc:  # noqa: BLE001
+                last_parse_exc = exc
+
+        snippet = (repair_source or "")[:300]
+        raise ModelUnavailableError(
+            "Model response was not valid JSON. "
+            "Adjust prompts/model or lower temperature. "
+            "If using DeepSeek reasoning models, prefer deepseek-chat or reduce temperature to 0.1. "
+            f"Raw snippet: {snippet}"
+        ) from last_parse_exc
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -125,7 +143,9 @@ class OpenAICompatibleProvider:
         }
         try:
             data = self._post_chat_completion(payload=repair_payload, prefer_json_mode=True)
-            repaired = self._extract_chat_content(data)
+            repaired, reasoning = self._extract_chat_texts(data)
+            if not repaired.strip():
+                repaired = reasoning
             return repaired if repaired.strip() else None
         except Exception:  # noqa: BLE001
             return None
@@ -176,7 +196,7 @@ class OpenAICompatibleProvider:
         return any(marker in body for marker in markers)
 
     @staticmethod
-    def _extract_chat_content(data: dict[str, Any]) -> str:
+    def _extract_chat_texts(data: dict[str, Any]) -> tuple[str, str]:
         choices = data.get("choices")
         if not isinstance(choices, list) or not choices:
             raise KeyError("Missing choices")
@@ -185,7 +205,12 @@ class OpenAICompatibleProvider:
         if not isinstance(message, dict):
             raise KeyError("Missing message")
 
-        content = message.get("content")
+        content_text = OpenAICompatibleProvider._extract_text_from_message_content(message.get("content"))
+        reasoning_text = OpenAICompatibleProvider._extract_reasoning_text(message)
+        return content_text, reasoning_text
+
+    @staticmethod
+    def _extract_text_from_message_content(content: Any) -> str:
         if isinstance(content, str):
             return content
 
@@ -207,7 +232,32 @@ class OpenAICompatibleProvider:
             if merged:
                 return merged
 
-        raise KeyError("No textual content in message")
+        return ""
+
+    @staticmethod
+    def _extract_reasoning_text(message: dict[str, Any]) -> str:
+        candidates = [
+            message.get("reasoning_content"),
+            message.get("reasoning"),
+            message.get("reasoning_text"),
+        ]
+
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+            if isinstance(candidate, list):
+                parts: list[str] = []
+                for item in candidate:
+                    if isinstance(item, str):
+                        parts.append(item)
+                    elif isinstance(item, dict):
+                        text = item.get("text")
+                        if isinstance(text, str):
+                            parts.append(text)
+                merged = "\n".join(p for p in parts if p).strip()
+                if merged:
+                    return merged
+        return ""
 
     def _emit_output(self, system_prompt: str, text: str, phase: str) -> None:
         if self.debug_callback is None:
