@@ -12,6 +12,9 @@ benchmark_families:
   - symbolic
   - dynamical
   - compression
+  - real_world_laws
+  - autonomy_generalization
+  - open_world_noise
 samples_per_task_train: 40
 samples_per_task_heldout: 20
 verifier_modes:

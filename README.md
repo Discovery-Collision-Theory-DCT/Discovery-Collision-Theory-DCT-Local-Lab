@@ -1,6 +1,6 @@
 # Discovery Collision Theory (DCT) Local Lab
 
-本项目是一个可本地复现、可审计、可扩展的研究框架，用于验证以下机制是否在**受控任务**中成立：
+本项目是一个可本地复现、可审计、可扩展的研究框架。当前版本用于验证以下机制是否在**受控任务**中成立，并把“走向开放世界科学发现能力”作为主线目标：
 
 `双轨发现（A/B） + 碰撞合成（Collision） + 多模式验证（Verifier） + 记忆回写（Memory Write-back）`
 
@@ -11,23 +11,24 @@
 ## 目录
 
 1. [研究目标](#研究目标)
-2. [科学边界与诚实声明](#科学边界与诚实声明)
-3. [系统架构](#系统架构)
-4. [实验设计](#实验设计)
-5. [指标体系](#指标体系)
-6. [项目结构](#项目结构)
-7. [环境要求](#环境要求)
-8. [快速开始（5分钟）](#快速开始5分钟)
-9. [模型后端配置（主流厂商）](#模型后端配置主流厂商)
-10. [运行实验](#运行实验)
-11. [如何比较 baseline 与 full_dct](#如何比较-baseline-与-full_dct)
-12. [输出与产物说明](#输出与产物说明)
-13. [配置说明](#配置说明)
-14. [Ablation（消融）指南](#ablation消融指南)
-15. [可选本地 API](#可选本地-api)
-16. [测试与质量保证](#测试与质量保证)
-17. [常见问题与故障排查](#常见问题与故障排查)
-18. [复现建议与研究规范](#复现建议与研究规范)
+2. [主目标升级（开放世界科学发现）](#主目标升级开放世界科学发现)
+3. [科学边界与诚实声明](#科学边界与诚实声明)
+4. [系统架构](#系统架构)
+5. [实验设计](#实验设计)
+6. [指标体系](#指标体系)
+7. [项目结构](#项目结构)
+8. [环境要求](#环境要求)
+9. [快速开始（5分钟）](#快速开始5分钟)
+10. [模型后端配置（主流厂商）](#模型后端配置主流厂商)
+11. [运行实验](#运行实验)
+12. [如何比较 baseline 与 full_dct](#如何比较-baseline-与-full_dct)
+13. [输出与产物说明](#输出与产物说明)
+14. [配置说明](#配置说明)
+15. [Ablation（消融）指南](#ablation消融指南)
+16. [可选本地 API](#可选本地-api)
+17. [测试与质量保证](#测试与质量保证)
+18. [常见问题与故障排查](#常见问题与故障排查)
+19. [复现建议与研究规范](#复现建议与研究规范)
 
 ---
 
@@ -45,6 +46,18 @@
 
 ---
 
+## 主目标升级（开放世界科学发现）
+
+你提出的三项要求，现定义为本项目的**最主要长期目标**：
+
+1. 证明系统可自动发现现实世界中的根本科学定律。  
+2. 证明系统具备超越任务设计边界的通用科学自主性。  
+3. 证明实验结果可直接迁移到高噪声、开放世界问题。  
+
+工程上，这意味着项目从“受控 benchmark 有效性”升级为“分阶段证据累积计划”。当前代码库首先解决阶段 1（受控任务机制有效），并为后续阶段提供可审计基础设施（轨迹、碰撞、验证、记忆、日志、可复现）。
+
+---
+
 ## 科学边界与诚实声明
 
 ### What this validates
@@ -52,10 +65,28 @@
 - 验证“记忆回写”是否改善后续轮次表现。
 - 验证“碰撞合成”是否优于朴素拼接。
 
-### What this does NOT prove
-- **不证明**系统可自动发现现实世界中的根本科学定律。
-- **不证明**超越任务设计边界的通用科学自主性。
-- **不证明**实验结果可直接迁移到高噪声、开放世界问题。
+### What this does NOT prove (当前版本)
+- **当前版本尚不能证明**系统可自动发现现实世界中的根本科学定律。
+- **当前版本尚不能证明**超越任务设计边界的通用科学自主性。
+- **当前版本尚不能证明**实验结果可直接迁移到高噪声、开放世界问题。
+
+### 何时才可宣称“已证明”
+必须满足以下条件（缺一不可）：
+
+1. 跨领域真实任务验证  
+- 在多个真实科学领域（如材料、生物、控制、天体）完成盲测任务，并由领域专家独立复核。
+
+2. Out-of-distribution 泛化证据  
+- 在训练任务分布外保持稳定发现能力，且显著优于强基线与人类启发式流程。
+
+3. 开放世界噪声与干预鲁棒性  
+- 在缺失、噪声、偏差、分布漂移、对抗干预条件下，结论仍可复现并通过外部验证。
+
+4. 外部可重复与第三方复验  
+- 独立团队使用不同实现与数据管线可重复主要结论，误差区间可接受。
+
+5. 失败案例与边界公开  
+- 必须公开失败类型、失效边界、负结果占比，避免仅展示成功样本导致误判。
 
 ---
 
@@ -95,7 +126,7 @@ observe
 
 ## 实验设计
 
-### Benchmark Families（3类）
+### Benchmark Families（6类）
 
 1. Hidden symbolic rule discovery
 - 整数映射、布尔规则、代数映射等隐藏规则重建。
@@ -105,6 +136,15 @@ observe
 
 3. Theory compression / rediscovery
 - 噪声观测下恢复更简洁、更接近真实生成规则的解释。
+
+4. Real-world law rediscovery
+- 从真实世界观测近似数据中重发现经典规律（如 Kepler-like、pendulum-like）。
+
+5. Autonomy generalization benchmark
+- 在伪相关特征漂移、尺度变化和机制不变条件下测试自主泛化。
+
+6. Open-world high-noise benchmark
+- 在异方差噪声、离群点和分布漂移下测试规则迁移与鲁棒性。
 
 ### Baselines
 
@@ -117,6 +157,7 @@ observe
 
 - `quickstart`: 轻量、适合笔记本快速验证。
 - `full_experiment`: 多 trial 与更多轮次，适合统计比较。
+- `openworld_pathfinder`: 面向开放世界目标的专项配置（真实规律+泛化+高噪声）。
 
 ---
 
@@ -130,23 +171,35 @@ observe
 2. `heldout_predictive_accuracy`
 - 每轮 top 表现在 held-out 上的平均精度。
 
-3. `rule_recovery_exact_match_rate`
+3. `ood_predictive_accuracy`
+- 分布外（OOD）样本上的平均精度。
+
+4. `stress_predictive_accuracy`
+- 高噪声/离群/漂移压力集上的平均精度。
+
+5. `transfer_generalization_score`
+- 迁移能力分数（heldout 与 OOD 的组合指标）。
+
+6. `open_world_readiness_score`
+- 开放世界准备度（heldout/OOD/stress 组合指标）。
+
+7. `rule_recovery_exact_match_rate`
 - 被接受候选中，表达式与真值表达式规范化后完全相等的比例。
 
-4. `compression_score`
+8. `compression_score`
 - 以表达式长度为代理：`1 / (1 + len(expression))`。
 
-5. `novelty_score`
+9. `novelty_score`
 - 候选与 memory 表达式 token Jaccard 相似度反向量。
 
-6. `time_to_valid_discovery`
+10. `time_to_valid_discovery`
 - 首次出现有效接受候选的 round index；若无则置为 `round_count + 1`。
 
-7. `cumulative_improvement`
+11. `cumulative_improvement`
 - 按轮次累计“最优 held-out 精度的净提升”。
 
-8. `uplift`
-- `full_dct` 相对各 baseline 的差值（目前汇总 4 项：validity/accuracy/exact/cumulative）。
+12. `uplift`
+- `full_dct` 相对各 baseline 的差值（含 heldout/OOD/stress/transfer/open-world 指标）。
 
 ---
 
@@ -156,7 +209,7 @@ observe
 .
 ├── dct/
 │   ├── agents/          # A/B 轨迹、collision、verifier
-│   ├── benchmarks/      # symbolic / dynamical / compression
+│   ├── benchmarks/      # synthetic + real_world_laws + autonomy + open_world_noise
 │   ├── llm/             # OpenAI-compatible provider
 │   ├── memory/          # SQLite 持久化
 │   ├── orchestration/   # 实验编排与 baseline
@@ -167,7 +220,8 @@ observe
 │   └── config.py        # env + yaml 配置加载
 ├── config/
 │   ├── quickstart.yaml
-│   └── full_experiment.yaml
+│   ├── full_experiment.yaml
+│   └── openworld_pathfinder.yaml
 ├── scripts/
 ├── tests/
 └── reports/example_report.md
@@ -353,7 +407,7 @@ dct run --config config/quickstart.yaml
 - trials: 1
 - rounds: 2
 - hypotheses_per_trajectory: 2
-- families: symbolic/dynamical/compression
+- families: symbolic/real_world_laws/open_world_noise
 
 ### Full Experiment（更稳健统计）
 
@@ -365,6 +419,15 @@ dct run --config config/full_experiment.yaml
 - trials: 3
 - rounds: 6
 - hypotheses_per_trajectory: 4
+- families: symbolic/dynamical/compression/real_world_laws/autonomy_generalization/open_world_noise
+
+### OpenWorld Pathfinder（主目标专项）
+
+```bash
+dct run --config config/openworld_pathfinder.yaml
+# 或
+dct openworld
+```
 
 ### 可用 CLI
 
@@ -375,8 +438,10 @@ dct check-model --model-provider openai --model-access-mode online --allow-remot
 dct check-model --model-provider anthropic --model-access-mode online --allow-remote-inference --anthropic-api-key "$ANTHROPIC_API_KEY" --model-name claude-sonnet-4-5
 dct check-model --model-provider gemini --model-access-mode online --allow-remote-inference --google-api-key "$GOOGLE_API_KEY" --model-name gemini-2.5-pro
 dct quickstart
+dct openworld
 dct run --config config/quickstart.yaml
 dct run --config config/full_experiment.yaml
+dct run --config config/openworld_pathfinder.yaml
 dct run --config config/quickstart.yaml --model-provider openai --model-access-mode online --allow-remote-inference --openai-base-url https://api.openai.com/v1 --openai-api-key "$OPENAI_API_KEY" --model-name gpt-5-mini
 dct run --config config/quickstart.yaml --model-provider anthropic --model-access-mode online --allow-remote-inference --anthropic-api-key "$ANTHROPIC_API_KEY" --model-name claude-sonnet-4-5
 dct run --config config/quickstart.yaml --model-provider gemini --model-access-mode online --allow-remote-inference --google-api-key "$GOOGLE_API_KEY" --model-name gemini-2.5-pro
@@ -402,6 +467,10 @@ dct serve --output-root outputs --host 127.0.0.1 --port 8000
 重点比较：
 - `validity_rate`
 - `heldout_predictive_accuracy`
+- `ood_predictive_accuracy`
+- `stress_predictive_accuracy`
+- `transfer_generalization_score`
+- `open_world_readiness_score`
 - `rule_recovery_exact_match_rate`
 - `cumulative_improvement`
 
@@ -409,6 +478,7 @@ dct serve --output-root outputs --host 127.0.0.1 --port 8000
 
 - `plots/method_accuracy.png`
 - `plots/method_validity.png`
+- `plots/open_world_metrics.png`
 - `plots/cumulative_improvement.png`
 - `plots/family_*_accuracy.png`
 

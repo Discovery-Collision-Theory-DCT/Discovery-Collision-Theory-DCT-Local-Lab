@@ -19,6 +19,7 @@ def generate_plots(method_summaries: list[MethodSummary], candidate_logs: list[C
 
     outputs.append(_plot_method_accuracy(method_summaries, plot_dir / "method_accuracy.png"))
     outputs.append(_plot_method_validity(method_summaries, plot_dir / "method_validity.png"))
+    outputs.append(_plot_open_world_metrics(method_summaries, plot_dir / "open_world_metrics.png"))
     outputs.extend(_plot_family_accuracy(candidate_logs, plot_dir))
     outputs.append(_plot_cumulative_improvement(method_summaries, plot_dir / "cumulative_improvement.png"))
     return outputs
@@ -96,6 +97,29 @@ def _plot_cumulative_improvement(method_summaries: list[MethodSummary], out: Pat
     plt.ylabel("Cumulative Improvement")
     plt.title("Cumulative Improvement by Method")
     plt.xticks(rotation=20)
+    plt.tight_layout()
+    plt.savefig(out)
+    plt.close()
+    return out
+
+
+def _plot_open_world_metrics(method_summaries: list[MethodSummary], out: Path) -> Path:
+    methods = sorted({m.method for m in method_summaries})
+    heldout_vals = [mean([m.heldout_predictive_accuracy for m in method_summaries if m.method == method]) for method in methods]
+    ood_vals = [mean([m.ood_predictive_accuracy for m in method_summaries if m.method == method]) for method in methods]
+    stress_vals = [mean([m.stress_predictive_accuracy for m in method_summaries if m.method == method]) for method in methods]
+
+    x = list(range(len(methods)))
+    width = 0.25
+
+    plt.figure(figsize=(10, 4))
+    plt.bar([i - width for i in x], heldout_vals, width=width, label="heldout")
+    plt.bar(x, ood_vals, width=width, label="ood")
+    plt.bar([i + width for i in x], stress_vals, width=width, label="stress")
+    plt.ylabel("Accuracy")
+    plt.title("Heldout vs OOD vs Stress Accuracy")
+    plt.xticks(x, methods, rotation=20)
+    plt.legend()
     plt.tight_layout()
     plt.savefig(out)
     plt.close()

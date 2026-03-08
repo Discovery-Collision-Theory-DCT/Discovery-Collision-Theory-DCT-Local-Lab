@@ -175,7 +175,14 @@ class ExperimentConfig(BaseModel):
         "baseline_merged_naive",
         "full_dct",
     ]
-    benchmark_families: list[str] = ["symbolic", "dynamical", "compression"]
+    benchmark_families: list[str] = [
+        "symbolic",
+        "dynamical",
+        "compression",
+        "real_world_laws",
+        "autonomy_generalization",
+        "open_world_noise",
+    ]
     samples_per_task_train: int = 18
     samples_per_task_heldout: int = 10
     verifier_modes: list[str] = ["predictive", "symbolic", "simulation"]

@@ -18,8 +18,12 @@ def compute_method_summary(
 
     if round_summaries:
         heldout_predictive_accuracy = mean([r.top_heldout_accuracy for r in round_summaries])
+        ood_predictive_accuracy = mean([r.top_ood_accuracy for r in round_summaries])
+        stress_predictive_accuracy = mean([r.top_stress_accuracy for r in round_summaries])
     else:
         heldout_predictive_accuracy = 0.0
+        ood_predictive_accuracy = 0.0
+        stress_predictive_accuracy = 0.0
 
     if accepted:
         exact_rate = mean([1.0 if c.exact_match else 0.0 for c in accepted])
@@ -30,6 +34,8 @@ def compute_method_summary(
     compression_score = mean(compression_values) if compression_values else 0.0
 
     novelty_score = mean([c.novelty for c in candidate_logs]) if candidate_logs else 0.0
+    transfer_generalization_score = mean([c.transfer_score for c in candidate_logs]) if candidate_logs else 0.0
+    open_world_readiness_score = mean([c.open_world_score for c in candidate_logs]) if candidate_logs else 0.0
 
     valid_rounds = [r.round_index for r in round_summaries if r.accepted_count > 0]
     time_to_valid = float(min(valid_rounds)) if valid_rounds else float(len(round_summaries) + 1)
@@ -46,6 +52,10 @@ def compute_method_summary(
         trial_index=trial_index,
         validity_rate=float(validity_rate),
         heldout_predictive_accuracy=float(heldout_predictive_accuracy),
+        ood_predictive_accuracy=float(ood_predictive_accuracy),
+        stress_predictive_accuracy=float(stress_predictive_accuracy),
+        transfer_generalization_score=float(transfer_generalization_score),
+        open_world_readiness_score=float(open_world_readiness_score),
         rule_recovery_exact_match_rate=float(exact_rate),
         compression_score=float(compression_score),
         novelty_score=float(novelty_score),
@@ -68,6 +78,10 @@ def compute_uplift(method_summaries: list[MethodSummary]) -> dict[str, dict[str,
     full_metrics = {
         "validity_rate": mean_metric(full_name, "validity_rate"),
         "heldout_predictive_accuracy": mean_metric(full_name, "heldout_predictive_accuracy"),
+        "ood_predictive_accuracy": mean_metric(full_name, "ood_predictive_accuracy"),
+        "stress_predictive_accuracy": mean_metric(full_name, "stress_predictive_accuracy"),
+        "transfer_generalization_score": mean_metric(full_name, "transfer_generalization_score"),
+        "open_world_readiness_score": mean_metric(full_name, "open_world_readiness_score"),
         "rule_recovery_exact_match_rate": mean_metric(full_name, "rule_recovery_exact_match_rate"),
         "cumulative_improvement": mean_metric(full_name, "cumulative_improvement"),
     }

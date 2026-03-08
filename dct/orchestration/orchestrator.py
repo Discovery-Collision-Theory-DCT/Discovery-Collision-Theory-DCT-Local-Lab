@@ -238,6 +238,16 @@ class DCTOrchestrator:
                     if accepted_records
                     else max((r.predictive_accuracy for r in round_records), default=0.0)
                 )
+                top_ood_accuracy = (
+                    max((r.ood_accuracy for r in accepted_records), default=0.0)
+                    if accepted_records
+                    else max((r.ood_accuracy for r in round_records), default=0.0)
+                )
+                top_stress_accuracy = (
+                    max((r.stress_accuracy for r in accepted_records), default=0.0)
+                    if accepted_records
+                    else max((r.stress_accuracy for r in round_records), default=0.0)
+                )
                 avg_novelty = mean([r.novelty for r in round_records]) if round_records else 0.0
 
                 if accepted_records and first_valid_round is None:
@@ -252,6 +262,8 @@ class DCTOrchestrator:
                         accepted_count=len(accepted_records),
                         validity_rate=validity_rate,
                         top_heldout_accuracy=top_accuracy,
+                        top_ood_accuracy=top_ood_accuracy,
+                        top_stress_accuracy=top_stress_accuracy,
                         average_novelty=avg_novelty,
                         time_to_valid_discovery=first_valid_round,
                     )
@@ -270,6 +282,8 @@ class DCTOrchestrator:
                         "accepted_count": len(accepted_records),
                         "validity_rate": validity_rate,
                         "top_heldout_accuracy": top_accuracy,
+                        "top_ood_accuracy": top_ood_accuracy,
+                        "top_stress_accuracy": top_stress_accuracy,
                         "average_novelty": avg_novelty,
                     },
                 )
@@ -324,14 +338,14 @@ class DCTOrchestrator:
         if not candidates:
             return []
 
-        quick_metrics_cache: dict[str, tuple[float, float, float]] = {}
+        quick_metrics_cache: dict[str, tuple[float, float, float, float, float]] = {}
         for c in candidates:
             quick_metrics_cache[c.hypothesis_id] = self._quick_metrics(task, c.expression)
 
         if disable_verifier:
             sorted_candidates = sorted(
                 candidates,
-                key=lambda c: (quick_metrics_cache[c.hypothesis_id][0], c.confidence),
+                key=lambda c: (quick_metrics_cache[c.hypothesis_id][0], quick_metrics_cache[c.hypothesis_id][3], c.confidence),
                 reverse=True,
             )
             accepted_ids = {sorted_candidates[0].hypothesis_id}
@@ -341,7 +355,7 @@ class DCTOrchestrator:
         records: list[CandidateLogRecord] = []
 
         for c in candidates:
-            predictive_acc, symbolic_acc, simulation_acc = quick_metrics_cache[c.hypothesis_id]
+            predictive_acc, symbolic_acc, simulation_acc, ood_acc, stress_acc = quick_metrics_cache[c.hypothesis_id]
 
             if disable_verifier:
                 accepted = c.hypothesis_id in accepted_ids
@@ -362,6 +376,8 @@ class DCTOrchestrator:
 
             novelty = c.scores.get("novelty", self._novelty_from_memory(c.expression, memory_expressions))
             exact = normalize_expr(c.expression) == normalize_expr(task.ground_truth_expression)
+            transfer_score = 0.5 * predictive_acc + 0.5 * ood_acc
+            open_world_score = 0.35 * predictive_acc + 0.35 * ood_acc + 0.30 * stress_acc
 
             records.append(
                 CandidateLogRecord(
@@ -379,6 +395,10 @@ class DCTOrchestrator:
                     predictive_accuracy=float(predictive_acc),
                     symbolic_accuracy=float(symbolic_acc),
                     simulation_accuracy=float(simulation_acc),
+                    ood_accuracy=float(ood_acc),
+                    stress_accuracy=float(stress_acc),
+                    transfer_score=float(transfer_score),
+                    open_world_score=float(open_world_score),
                     accepted=bool(accepted),
                     exact_match=bool(exact),
                 )
@@ -387,7 +407,7 @@ class DCTOrchestrator:
         return records
 
     @staticmethod
-    def _quick_metrics(task, expression: str) -> tuple[float, float, float]:
+    def _quick_metrics(task, expression: str) -> tuple[float, float, float, float, float]:
         predictive = DCTOrchestrator._accuracy(task.heldout, expression, float(task.metadata.get("target_tolerance", 0.0)))
 
         symbolic_tol = 0.0 if float(task.metadata.get("target_tolerance", 0.0)) == 0.0 else float(
@@ -403,7 +423,10 @@ class DCTOrchestrator:
         else:
             simulation = predictive
 
-        return predictive, symbolic, simulation
+        ood = DCTOrchestrator._accuracy(task.ood, expression, float(task.metadata.get("target_tolerance", 0.0)))
+        stress = DCTOrchestrator._accuracy(task.stress, expression, float(task.metadata.get("target_tolerance", 0.0)))
+
+        return predictive, symbolic, simulation, ood, stress
 
     @staticmethod
     def _accuracy(examples, expression: str, tol: float) -> float:

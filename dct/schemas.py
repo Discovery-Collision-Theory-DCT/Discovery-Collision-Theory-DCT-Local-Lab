@@ -33,6 +33,8 @@ class BenchmarkTask(BaseModel):
     ground_truth_rule_text: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     simulation_cases: list[SimulationCase] = Field(default_factory=list)
+    ood: list[ObservationExample] = Field(default_factory=list)
+    stress: list[ObservationExample] = Field(default_factory=list)
 
 
 class Hypothesis(BaseModel):
@@ -89,6 +91,10 @@ class CandidateLogRecord(BaseModel):
     predictive_accuracy: float
     symbolic_accuracy: float
     simulation_accuracy: float
+    ood_accuracy: float = 0.0
+    stress_accuracy: float = 0.0
+    transfer_score: float = 0.0
+    open_world_score: float = 0.0
     accepted: bool
     exact_match: bool
 
@@ -101,6 +107,8 @@ class RoundSummary(BaseModel):
     accepted_count: int
     validity_rate: float
     top_heldout_accuracy: float
+    top_ood_accuracy: float = 0.0
+    top_stress_accuracy: float = 0.0
     average_novelty: float
     time_to_valid_discovery: Optional[int]
 
@@ -110,6 +118,10 @@ class MethodSummary(BaseModel):
     trial_index: int
     validity_rate: float
     heldout_predictive_accuracy: float
+    ood_predictive_accuracy: float = 0.0
+    stress_predictive_accuracy: float = 0.0
+    transfer_generalization_score: float = 0.0
+    open_world_readiness_score: float = 0.0
     rule_recovery_exact_match_rate: float
     compression_score: float
     novelty_score: float

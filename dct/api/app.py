@@ -75,6 +75,8 @@ def create_app(output_root: Path) -> FastAPI:
             return repo_root / "config" / "quickstart.yaml"
         if mode == "full":
             return repo_root / "config" / "full_experiment.yaml"
+        if mode == "openworld":
+            return repo_root / "config" / "openworld_pathfinder.yaml"
         raise ValueError(f"Unsupported mode: {mode}")
 
     def _build_runtime_settings(req: RunRequest) -> RuntimeSettings:
@@ -192,6 +194,8 @@ def create_app(output_root: Path) -> FastAPI:
         if event_type == "task_completed":
             validity = event.get("validity_rate")
             top_acc = event.get("top_heldout_accuracy")
+            top_ood = event.get("top_ood_accuracy")
+            top_stress = event.get("top_stress_accuracy")
             try:
                 validity_str = f"{float(validity):.3f}"
             except (TypeError, ValueError):
@@ -200,11 +204,20 @@ def create_app(output_root: Path) -> FastAPI:
                 top_acc_str = f"{float(top_acc):.3f}"
             except (TypeError, ValueError):
                 top_acc_str = "n/a"
+            try:
+                top_ood_str = f"{float(top_ood):.3f}"
+            except (TypeError, ValueError):
+                top_ood_str = "n/a"
+            try:
+                top_stress_str = f"{float(top_stress):.3f}"
+            except (TypeError, ValueError):
+                top_stress_str = "n/a"
             return (
                 f"Task completed: method={event.get('method')} trial={event.get('trial_index')} "
                 f"round={event.get('round_index')} family={event.get('family')} "
                 f"candidates={event.get('candidate_count')} accepted={event.get('accepted_count')} "
-                f"validity={validity_str} top_acc={top_acc_str}"
+                f"validity={validity_str} top_acc={top_acc_str} "
+                f"ood={top_ood_str} stress={top_stress_str}"
             )
         if event_type == "trial_completed":
             return (
@@ -358,9 +371,11 @@ def create_app(output_root: Path) -> FastAPI:
     def configs() -> dict:
         quick = repo_root / "config" / "quickstart.yaml"
         full = repo_root / "config" / "full_experiment.yaml"
+        openworld = repo_root / "config" / "openworld_pathfinder.yaml"
         return {
             "quickstart": quick.read_text(encoding="utf-8") if quick.exists() else "",
             "full_experiment": full.read_text(encoding="utf-8") if full.exists() else "",
+            "openworld_pathfinder": openworld.read_text(encoding="utf-8") if openworld.exists() else "",
         }
 
     @app.post("/api/run")

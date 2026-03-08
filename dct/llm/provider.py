@@ -53,10 +53,8 @@ class OpenAICompatibleProvider:
                 {"role": "user", "content": user_prompt},
             ],
         }
-        url = f"{self.base_url}/chat/completions"
         try:
-            response = self.client.post(url, headers=self._headers(), json=payload)
-            response.raise_for_status()
+            data = self._post_chat_completion(payload=payload, prefer_json_mode=True)
         except httpx.HTTPError as exc:
             if self.settings.is_remote_endpoint():
                 message = (
@@ -74,10 +72,9 @@ class OpenAICompatibleProvider:
                 )
             raise ModelUnavailableError(message) from exc
 
-        data = response.json()
         try:
-            text = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError) as exc:
+            text = self._extract_chat_content(data)
+        except (KeyError, IndexError, TypeError) as exc:
             raise ModelUnavailableError(f"Unexpected model response shape: {data}") from exc
         self._emit_output(system_prompt=system_prompt, text=text, phase="primary")
 
@@ -126,14 +123,91 @@ class OpenAICompatibleProvider:
                 },
             ],
         }
-        url = f"{self.base_url}/chat/completions"
         try:
-            resp = self.client.post(url, headers=self._headers(), json=repair_payload)
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            data = self._post_chat_completion(payload=repair_payload, prefer_json_mode=True)
+            repaired = self._extract_chat_content(data)
+            return repaired if repaired.strip() else None
         except Exception:  # noqa: BLE001
             return None
+
+    def _post_chat_completion(self, payload: dict[str, Any], prefer_json_mode: bool) -> dict[str, Any]:
+        url = f"{self.base_url}/chat/completions"
+        attempts: list[dict[str, Any]] = []
+        if prefer_json_mode:
+            with_json_mode = dict(payload)
+            with_json_mode["response_format"] = {"type": "json_object"}
+            attempts.append(with_json_mode)
+        attempts.append(payload)
+
+        last_error: Exception | None = None
+        for idx, attempt in enumerate(attempts):
+            try:
+                resp = self.client.post(url, headers=self._headers(), json=attempt)
+                resp.raise_for_status()
+                return resp.json()
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if idx == 0 and prefer_json_mode and self._is_response_format_unsupported(exc.response):
+                    continue
+                raise
+            except httpx.HTTPError as exc:
+                last_error = exc
+                raise
+
+        if last_error is not None:
+            raise last_error
+        raise httpx.HTTPError("Unknown error while posting chat completion request")
+
+    @staticmethod
+    def _is_response_format_unsupported(response: httpx.Response | None) -> bool:
+        if response is None:
+            return False
+        if response.status_code not in {400, 404, 415, 422}:
+            return False
+        body = response.text.lower()
+        markers = [
+            "response_format",
+            "json_schema",
+            "unsupported",
+            "unknown field",
+            "extra fields not permitted",
+            "not supported",
+        ]
+        return any(marker in body for marker in markers)
+
+    @staticmethod
+    def _extract_chat_content(data: dict[str, Any]) -> str:
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise KeyError("Missing choices")
+
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            raise KeyError("Missing message")
+
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    parts.append(part)
+                    continue
+                if not isinstance(part, dict):
+                    continue
+                text = part.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                    continue
+                if part.get("type") == "text" and isinstance(part.get("content"), str):
+                    parts.append(part["content"])
+            merged = "\n".join(p for p in parts if p).strip()
+            if merged:
+                return merged
+
+        raise KeyError("No textual content in message")
 
     def _emit_output(self, system_prompt: str, text: str, phase: str) -> None:
         if self.debug_callback is None:

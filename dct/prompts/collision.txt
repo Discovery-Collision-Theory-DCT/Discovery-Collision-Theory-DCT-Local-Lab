@@ -31,3 +31,5 @@ Output requirements:
 Rules:
 - Prefer candidates that improve predictive behavior and explanation coverage.
 - Keep expressions executable and concise.
+- DO NOT include chain-of-thought, step-by-step calculations, or long derivations.
+- Keep `rationale` to at most 20 words.

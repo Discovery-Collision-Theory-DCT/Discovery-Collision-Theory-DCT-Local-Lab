@@ -22,6 +22,8 @@ def _default_config_for_mode(mode: str) -> Path:
         return Path("config/quickstart.yaml")
     if mode == "full":
         return Path("config/full_experiment.yaml")
+    if mode == "openworld":
+        return Path("config/openworld_pathfinder.yaml")
     raise ValueError(f"Unsupported mode: {mode}")
 
 
@@ -114,7 +116,7 @@ def _enforce_access_policy_or_exit(settings: RuntimeSettings) -> None:
 @app.command()
 def run(
     config: Optional[Path] = typer.Option(None, help="Path to YAML config"),
-    mode: str = typer.Option("quickstart", help="quickstart or full"),
+    mode: str = typer.Option("quickstart", help="quickstart, full, or openworld"),
     output_dir: Optional[Path] = typer.Option(None, help="Override output directory"),
     skip_model_check: bool = typer.Option(False, help="Skip startup model health check"),
     model_provider: Optional[str] = typer.Option(None, help="Provider: openai_compatible/openai/anthropic/gemini/..."),
@@ -181,6 +183,27 @@ def quickstart() -> None:
     run(
         config=Path("config/quickstart.yaml"),
         mode="quickstart",
+        output_dir=None,
+        skip_model_check=False,
+        model_provider=None,
+        model_access_mode=None,
+        model_name=None,
+        allow_remote_inference=False,
+        openai_base_url=None,
+        openai_api_key=None,
+        anthropic_base_url=None,
+        anthropic_api_key=None,
+        google_base_url=None,
+        google_api_key=None,
+    )
+
+
+@app.command("openworld")
+def openworld() -> None:
+    """Run the open-world pathfinder experiment pack."""
+    run(
+        config=Path("config/openworld_pathfinder.yaml"),
+        mode="openworld",
         output_dir=None,
         skip_model_check=False,
         model_provider=None,

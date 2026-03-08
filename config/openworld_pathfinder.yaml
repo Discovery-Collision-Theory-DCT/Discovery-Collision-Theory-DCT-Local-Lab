@@ -1,19 +1,19 @@
-name: quickstart
-seed: 123
-trials: 1
-rounds: 2
-hypotheses_per_trajectory: 2
+name: openworld_pathfinder
+seed: 321
+trials: 3
+rounds: 5
+hypotheses_per_trajectory: 4
 baselines:
   - baseline_single_a
   - baseline_single_b
   - baseline_merged_naive
   - full_dct
 benchmark_families:
-  - symbolic
   - real_world_laws
+  - autonomy_generalization
   - open_world_noise
-samples_per_task_train: 18
-samples_per_task_heldout: 10
+samples_per_task_train: 48
+samples_per_task_heldout: 24
 verifier_modes:
   - predictive
   - symbolic
@@ -23,4 +23,4 @@ ablation:
   no_memory_write_back: false
   no_verifier: false
   single_verifier_mode_only: null
-output_dir: outputs/quickstart
+output_dir: outputs/openworld_pathfinder

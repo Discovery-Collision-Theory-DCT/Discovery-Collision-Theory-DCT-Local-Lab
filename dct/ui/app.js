@@ -40,6 +40,7 @@ const els = {
 
   quickConfig: document.getElementById("quick-config"),
   fullConfig: document.getElementById("full-config"),
+  openworldConfig: document.getElementById("openworld-config"),
   readmeContent: document.getElementById("readme-content"),
 };
 
@@ -350,6 +351,10 @@ function renderMethodsTable(methodSummaries) {
           <td>${m.trial_index}</td>
           <td>${formatNumber(toNumber(m.validity_rate))}</td>
           <td>${formatNumber(toNumber(m.heldout_predictive_accuracy))}</td>
+          <td>${formatNumber(toNumber(m.ood_predictive_accuracy))}</td>
+          <td>${formatNumber(toNumber(m.stress_predictive_accuracy))}</td>
+          <td>${formatNumber(toNumber(m.transfer_generalization_score))}</td>
+          <td>${formatNumber(toNumber(m.open_world_readiness_score))}</td>
           <td>${formatNumber(toNumber(m.rule_recovery_exact_match_rate))}</td>
           <td>${formatNumber(toNumber(m.compression_score))}</td>
           <td>${formatNumber(toNumber(m.novelty_score))}</td>
@@ -369,6 +374,10 @@ function renderMethodsTable(methodSummaries) {
             <th>Trial</th>
             <th>Validity</th>
             <th>Heldout Acc</th>
+            <th>OOD Acc</th>
+            <th>Stress Acc</th>
+            <th>Transfer</th>
+            <th>OpenWorld</th>
             <th>Exact Match</th>
             <th>Compression</th>
             <th>Novelty</th>
@@ -453,12 +462,20 @@ async function loadRunDetail(runName) {
 }
 
 async function loadKnowledge() {
-  if (!hasElement(els.readmeContent) || !hasElement(els.quickConfig) || !hasElement(els.fullConfig)) return;
+  if (
+    !hasElement(els.readmeContent) ||
+    !hasElement(els.quickConfig) ||
+    !hasElement(els.fullConfig) ||
+    !hasElement(els.openworldConfig)
+  ) {
+    return;
+  }
   try {
     const [readme, configs] = await Promise.all([api("/api/readme"), api("/api/configs")]);
     setText(els.readmeContent, readme.content || "");
     setText(els.quickConfig, configs.quickstart || "");
     setText(els.fullConfig, configs.full_experiment || "");
+    setText(els.openworldConfig, configs.openworld_pathfinder || "");
   } catch (err) {
     setText(els.readmeContent, `Failed to load docs: ${err.message}`);
   }

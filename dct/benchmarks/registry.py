@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from dct.benchmarks.autonomy_generalization import AutonomyGeneralizationBenchmark
 from dct.benchmarks.compression import CompressionBenchmark
 from dct.benchmarks.dynamical import DynamicalBenchmark
+from dct.benchmarks.open_world_noise import OpenWorldNoiseBenchmark
+from dct.benchmarks.real_world_laws import RealWorldLawsBenchmark
 from dct.benchmarks.symbolic import SymbolicBenchmark
 from dct.schemas import BenchmarkTask
 
@@ -12,6 +15,9 @@ class BenchmarkRegistry:
             "symbolic": SymbolicBenchmark(),
             "dynamical": DynamicalBenchmark(),
             "compression": CompressionBenchmark(),
+            "real_world_laws": RealWorldLawsBenchmark(),
+            "autonomy_generalization": AutonomyGeneralizationBenchmark(),
+            "open_world_noise": OpenWorldNoiseBenchmark(),
         }
 
     def generate(self, family: str, seed: int, n_train: int, n_heldout: int) -> BenchmarkTask:

@@ -12,3 +12,5 @@ Rules:
 - Return ONLY JSON.
 - Confidence must be between 0 and 1.
 - Tie reason directly to metrics evidence.
+- DO NOT output chain-of-thought or analysis trace.
+- Keep `reason` to at most 20 words.

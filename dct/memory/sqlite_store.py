@@ -128,6 +128,30 @@ class SQLiteMemory:
                     json.dumps(ex.target),
                 )
             )
+        for ex in task.ood:
+            rows.append(
+                (
+                    run_id,
+                    round_index,
+                    task.family,
+                    task.task_id,
+                    "ood",
+                    json.dumps(ex.features),
+                    json.dumps(ex.target),
+                )
+            )
+        for ex in task.stress:
+            rows.append(
+                (
+                    run_id,
+                    round_index,
+                    task.family,
+                    task.task_id,
+                    "stress",
+                    json.dumps(ex.features),
+                    json.dumps(ex.target),
+                )
+            )
         self.conn.executemany(
             """
             INSERT INTO observations(run_id, round_index, family, task_id, split, features_json, target_json)
