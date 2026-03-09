@@ -3,6 +3,8 @@ from pathlib import Path
 from dct.config import AblationConfig, ExperimentConfig, RuntimeSettings
 from dct.memory import SQLiteMemory
 from dct.orchestration import DCTOrchestrator
+from dct.schemas import Hypothesis
+from dct.utils import new_id
 from tests.fake_provider import FakeProvider
 
 
@@ -63,6 +65,24 @@ def test_single_verifier_mode_ablation_disables_robustness_gate(monkeypatch, tmp
     orchestrator = DCTOrchestrator(settings=settings, provider=FakeProvider(), memory=memory)
     seen_gate_flags: list[bool] = []
     original_verify = orchestrator.verifier.verify
+
+    def _fixed_a_propose(task, round_index, memory_summaries, hypotheses_to_generate):
+        feature = task.feature_names[0]
+        return [
+            Hypothesis(
+                hypothesis_id=new_id("hypa"),
+                source="trajectory_a",
+                round_index=round_index,
+                family=task.family,
+                task_id=task.task_id,
+                rule_text="fixed",
+                expression=feature,
+                rationale="fixed",
+                confidence=0.8,
+            )
+        ]
+
+    monkeypatch.setattr(orchestrator.trajectory_a, "propose", _fixed_a_propose)
 
     def _wrapped_verify(*args, **kwargs):
         seen_gate_flags.append(bool(kwargs.get("enable_robustness_gate", True)))

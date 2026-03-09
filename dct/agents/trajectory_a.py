@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dct.agents.common import build_discovery_prompt
+from dct.agents.common import build_discovery_prompt, expression_is_executable, safe_confidence
 from dct.llm.prompts import load_prompt
 from dct.llm.provider import LLMProvider
 from dct.schemas import BenchmarkTask, Hypothesis
@@ -30,7 +30,7 @@ class TrajectoryAAgent:
             if not isinstance(item, dict):
                 continue
             expression = str(item.get("expression", "")).strip()
-            if not expression:
+            if not expression or not expression_is_executable(task, expression):
                 continue
             hypotheses.append(
                 Hypothesis(
@@ -42,7 +42,7 @@ class TrajectoryAAgent:
                     rule_text=str(item.get("rule_text", ""))[:300],
                     expression=expression,
                     rationale=str(item.get("rationale", ""))[:500],
-                    confidence=clamp01(float(item.get("confidence", 0.5))),
+                    confidence=clamp01(safe_confidence(item.get("confidence", 0.5), 0.5)),
                 )
             )
         return hypotheses

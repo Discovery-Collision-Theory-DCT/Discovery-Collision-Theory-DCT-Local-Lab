@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from dct.schemas import BenchmarkTask
+from dct.utils import safe_eval_expression
 
 
 def build_discovery_prompt(
@@ -27,3 +29,27 @@ def build_discovery_prompt(
         "memory_context": memory_summaries[:8],
     }
     return json.dumps(payload, ensure_ascii=True, indent=2)
+
+
+def expression_is_executable(task: BenchmarkTask, expression: str, max_examples: int = 8) -> bool:
+    expr = (expression or "").strip()
+    if not expr:
+        return False
+
+    examples = task.train[: min(max_examples, len(task.train))]
+    if not examples:
+        return True
+
+    for ex in examples:
+        try:
+            safe_eval_expression(expr, ex.features)
+        except ValueError:
+            return False
+    return True
+
+
+def safe_confidence(value: Any, default: float = 0.5) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)

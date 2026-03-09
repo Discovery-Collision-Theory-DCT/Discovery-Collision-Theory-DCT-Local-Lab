@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from dct.agents.common import expression_is_executable, safe_confidence
 from dct.llm.prompts import load_prompt
 from dct.llm.provider import LLMProvider
 from dct.schemas import BenchmarkTask, CollisionScore, Hypothesis
-from dct.utils import clamp01, jaccard_similarity, new_id, safe_eval_expression, token_set
+from dct.utils import clamp01, jaccard_similarity, new_id, normalize_expr, safe_eval_expression, token_set
 
 
 @dataclass
@@ -35,6 +36,7 @@ class CollisionEngine:
 
         pair_scores = self._score_pairs(task, hypotheses_a, hypotheses_b, memory_expressions)
         top_pairs = sorted(pair_scores, key=lambda p: p.score.collision_strength, reverse=True)[:3]
+        banned_expressions = self._banned_expressions(hypotheses_a, hypotheses_b, memory_expressions)
 
         user_prompt = json.dumps(
             {
@@ -70,6 +72,7 @@ class CollisionEngine:
         )
 
         llm_candidates: list[Hypothesis] = []
+        seen_generated: set[str] = set()
         try:
             data = self.provider.generate_json(self.system_prompt, user_prompt)
             raw_candidates = data.get("collision_hypotheses", [])
@@ -80,6 +83,11 @@ class CollisionEngine:
                     continue
                 expression = str(item.get("expression", "")).strip()
                 if not expression:
+                    continue
+                normalized = normalize_expr(expression)
+                if not normalized or normalized in banned_expressions or normalized in seen_generated:
+                    continue
+                if not expression_is_executable(task, expression):
                     continue
                 best_pair = top_pairs[0]
                 llm_candidates.append(
@@ -92,17 +100,36 @@ class CollisionEngine:
                         rule_text=str(item.get("rule_text", ""))[:300],
                         expression=expression,
                         rationale=str(item.get("rationale", ""))[:500],
-                        confidence=clamp01(float(item.get("confidence", best_pair.score.collision_strength))),
+                        confidence=clamp01(
+                            safe_confidence(item.get("confidence", best_pair.score.collision_strength), best_pair.score.collision_strength)
+                        ),
                         parents=[best_pair.a.hypothesis_id, best_pair.b.hypothesis_id],
                         scores=best_pair.score.model_dump(),
                     )
                 )
+                seen_generated.add(normalized)
         except Exception:  # noqa: BLE001
             llm_candidates = []
 
         if llm_candidates:
             return llm_candidates
-        return self._heuristic_collision(top_pairs, task, round_index, max_to_generate)
+        return self._heuristic_collision(
+            top_pairs=top_pairs,
+            task=task,
+            round_index=round_index,
+            max_to_generate=max_to_generate,
+            banned_expressions=banned_expressions,
+        )
+
+    @staticmethod
+    def _banned_expressions(
+        hypotheses_a: list[Hypothesis],
+        hypotheses_b: list[Hypothesis],
+        memory_expressions: list[str],
+    ) -> set[str]:
+        banned = {normalize_expr(h.expression) for h in hypotheses_a + hypotheses_b}
+        banned.update(normalize_expr(expr) for expr in memory_expressions)
+        return {b for b in banned if b}
 
     def _score_pairs(
         self,
@@ -181,10 +208,21 @@ class CollisionEngine:
         task: BenchmarkTask,
         round_index: int,
         max_to_generate: int,
+        banned_expressions: set[str],
     ) -> list[Hypothesis]:
         out: list[Hypothesis] = []
+        target_is_bool = bool(task.train) and all(isinstance(ex.target, bool) for ex in task.train[: min(8, len(task.train))])
         for pair in top_pairs[:max_to_generate]:
-            pick = pair.a if pair.a.confidence >= pair.b.confidence else pair.b
+            merged_expression = self._heuristic_merge_expression(
+                expr_a=pair.a.expression,
+                expr_b=pair.b.expression,
+                target_is_bool=target_is_bool,
+            )
+            normalized = normalize_expr(merged_expression)
+            if not normalized or normalized in banned_expressions:
+                continue
+            if not expression_is_executable(task, merged_expression):
+                continue
             out.append(
                 Hypothesis(
                     hypothesis_id=new_id("hypc"),
@@ -192,15 +230,19 @@ class CollisionEngine:
                     round_index=round_index,
                     family=task.family,
                     task_id=task.task_id,
-                    rule_text=f"Heuristic collision pick from {pair.a.hypothesis_id} + {pair.b.hypothesis_id}",
-                    expression=pick.expression,
-                    rationale=(
-                        "Collision fallback selected higher-confidence parent while preserving "
-                        "pairwise complementarity signal."
-                    ),
+                    rule_text=f"Heuristic merge from {pair.a.hypothesis_id} + {pair.b.hypothesis_id}",
+                    expression=merged_expression,
+                    rationale="Heuristic fallback merged both parent expressions to keep synthesized novelty.",
                     confidence=pair.score.collision_strength,
                     parents=[pair.a.hypothesis_id, pair.b.hypothesis_id],
                     scores=pair.score.model_dump(),
                 )
             )
+            banned_expressions.add(normalized)
         return out
+
+    @staticmethod
+    def _heuristic_merge_expression(expr_a: str, expr_b: str, target_is_bool: bool) -> str:
+        if target_is_bool:
+            return f"(({expr_a}) and ({expr_b}))"
+        return f"((({expr_a}) + ({expr_b})) / 2)"

@@ -31,5 +31,10 @@ Output requirements:
 Rules:
 - Prefer candidates that improve predictive behavior and explanation coverage.
 - Keep expressions executable and concise.
+- Return only synthesized theories; do NOT repeat any parent expression or memory expression.
+- Each returned expression must combine signals from both trajectories.
+- Allowed operators: `+ - * / // % **`, comparisons, boolean ops, parentheses.
+- Allowed calls only: `abs min max round int float bool pow` and `math.*`.
+- Do NOT use imports, assignments, lambdas, comprehensions, or custom function names.
 - DO NOT include chain-of-thought, step-by-step calculations, or long derivations.
 - Keep `rationale` to at most 20 words.

@@ -14,7 +14,13 @@ class MalformedProvider:
         if "Trajectory A" in system_prompt:
             return {"hypotheses": "not-a-list"}
         if "Trajectory B" in system_prompt:
-            return {"hypotheses": ["bad-item", {"expression": "x+1", "rule_text": "ok", "rationale": "r", "confidence": 0.5}]}
+            return {
+                "hypotheses": [
+                    "bad-item",
+                    {"expression": "1", "rule_text": "ok", "rationale": "r", "confidence": "not-number"},
+                    {"expression": "z+1", "rule_text": "bad-var", "rationale": "r", "confidence": 0.5},
+                ]
+            }
         if "Collision Engine" in system_prompt:
             return {"collision_hypotheses": "not-a-list"}
         return {}
@@ -32,13 +38,17 @@ def test_trajectory_agents_ignore_malformed_hypothesis_payloads():
 
     assert a_hyps == []
     assert len(b_hyps) == 1
-    assert b_hyps[0].expression == "x+1"
+    assert b_hyps[0].expression == "1"
+    assert b_hyps[0].confidence == 0.5
 
 
 def test_collision_engine_ignores_malformed_collision_payload_and_falls_back():
     task = BenchmarkRegistry().generate("symbolic", seed=89, n_train=12, n_heldout=6)
     provider = MalformedProvider()
     engine = CollisionEngine(provider)
+    feature = task.feature_names[0]
+    expr_a = f"({feature} + 1)"
+    expr_b = f"({feature} + 2)"
 
     hyp_a = Hypothesis(
         hypothesis_id=new_id("ha"),
@@ -47,7 +57,7 @@ def test_collision_engine_ignores_malformed_collision_payload_and_falls_back():
         family=task.family,
         task_id=task.task_id,
         rule_text="A",
-        expression="x+1",
+        expression=expr_a,
         rationale="",
         confidence=0.6,
     )
@@ -58,7 +68,7 @@ def test_collision_engine_ignores_malformed_collision_payload_and_falls_back():
         family=task.family,
         task_id=task.task_id,
         rule_text="B",
-        expression="x+2",
+        expression=expr_b,
         rationale="",
         confidence=0.7,
     )
