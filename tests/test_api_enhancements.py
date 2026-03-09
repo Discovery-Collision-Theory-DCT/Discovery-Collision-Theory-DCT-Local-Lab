@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from dct.api.app import create_app
 from dct.config import ExperimentConfig
+from dct.orchestration import RunCancelledError
 
 
 class _DummyProvider:
@@ -188,7 +189,7 @@ def test_stop_job_cancels_running_job(monkeypatch, tmp_path: Path):
             self.provider = provider
             self.memory = memory
 
-        def run(self, exp_config, progress_callback=None):
+        def run(self, exp_config, progress_callback=None, should_stop=None):
             if progress_callback is not None:
                 progress_callback(
                     {
@@ -201,6 +202,8 @@ def test_stop_job_cancels_running_job(monkeypatch, tmp_path: Path):
                 )
             for i in range(120):
                 time.sleep(0.01)
+                if callable(should_stop) and should_stop():
+                    raise RunCancelledError("cancelled in test slow orchestrator")
                 if progress_callback is not None:
                     progress_callback(
                         {

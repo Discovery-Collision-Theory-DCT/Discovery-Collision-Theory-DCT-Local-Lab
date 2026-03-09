@@ -46,11 +46,14 @@ class DCTOrchestrator:
         self,
         config: ExperimentConfig,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[ExperimentSummary, Path]:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         run_name = f"{config.name}_{timestamp}"
         run_output_dir = Path(config.output_dir) / run_name
         run_output_dir.mkdir(parents=True, exist_ok=True)
+
+        self._check_stop(should_stop)
 
         self._emit(
             progress_callback,
@@ -69,6 +72,7 @@ class DCTOrchestrator:
 
         for method in config.baselines:
             for trial_index in range(config.trials):
+                self._check_stop(should_stop)
                 self._emit(
                     progress_callback,
                     {
@@ -91,6 +95,7 @@ class DCTOrchestrator:
                     trial_index=trial_index,
                     config=config,
                     progress_callback=progress_callback,
+                    should_stop=should_stop,
                 )
                 candidate_logs.extend(trial_logs)
                 accepted_count = len([r for r in trial_logs if r.accepted])
@@ -113,6 +118,7 @@ class DCTOrchestrator:
                         "accepted_count": accepted_count,
                     },
                 )
+                self._check_stop(should_stop)
 
         summary = ExperimentSummary(
             run_name=run_name,
@@ -127,6 +133,7 @@ class DCTOrchestrator:
         writer.write_round_jsonl(method_summaries)
         writer.write_summary_json(summary)
         generate_plots(method_summaries, candidate_logs, run_output_dir)
+        self._check_stop(should_stop)
 
         self._emit(
             progress_callback,
@@ -147,6 +154,7 @@ class DCTOrchestrator:
         trial_index: int,
         config: ExperimentConfig,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[list[RoundSummary], list[CandidateLogRecord]]:
         round_summaries: list[RoundSummary] = []
         candidate_logs: list[CandidateLogRecord] = []
@@ -160,6 +168,7 @@ class DCTOrchestrator:
 
         for round_index in range(config.rounds):
             for family_index, family in enumerate(config.benchmark_families):
+                self._check_stop(should_stop)
                 task_seed = config.seed + (trial_index * 10000) + (round_index * 100) + family_index
                 self._emit(
                     progress_callback,
@@ -179,6 +188,7 @@ class DCTOrchestrator:
                     n_train=config.samples_per_task_train,
                     n_heldout=config.samples_per_task_heldout,
                 )
+                self._check_stop(should_stop)
                 self.memory.log_observations(run_id, round_index, task)
 
                 memory_summaries = []
@@ -191,6 +201,7 @@ class DCTOrchestrator:
                 hyp_b: list[Hypothesis] = []
 
                 if method in {BASELINE_SINGLE_A, BASELINE_MERGED_NAIVE, FULL_DCT}:
+                    self._check_stop(should_stop)
                     hyp_a = self.trajectory_a.propose(
                         task=task,
                         round_index=round_index,
@@ -199,6 +210,7 @@ class DCTOrchestrator:
                     )
 
                 if method in {BASELINE_SINGLE_B, BASELINE_MERGED_NAIVE, FULL_DCT}:
+                    self._check_stop(should_stop)
                     hyp_b = self.trajectory_b.propose(
                         task=task,
                         round_index=round_index,
@@ -215,6 +227,7 @@ class DCTOrchestrator:
                     memory_expressions=memory_expressions,
                     no_collision=config.ablation.no_collision,
                 )
+                self._check_stop(should_stop)
 
                 for c in candidates:
                     self.memory.log_hypothesis(run_id, c)
@@ -231,6 +244,7 @@ class DCTOrchestrator:
                     disable_verifier=config.ablation.no_verifier,
                     disable_memory_write=config.ablation.no_memory_write_back,
                     memory_expressions=memory_expressions,
+                    should_stop=should_stop,
                 )
 
                 candidate_logs.extend(round_records)
@@ -290,6 +304,7 @@ class DCTOrchestrator:
                         "average_novelty": avg_novelty,
                     },
                 )
+                self._check_stop(should_stop)
 
         return round_summaries, candidate_logs
 
@@ -338,6 +353,7 @@ class DCTOrchestrator:
         disable_verifier: bool,
         disable_memory_write: bool,
         memory_expressions: list[str],
+        should_stop: Callable[[], bool] | None = None,
     ) -> list[CandidateLogRecord]:
         if not candidates:
             return []
@@ -359,6 +375,7 @@ class DCTOrchestrator:
         records: list[CandidateLogRecord] = []
 
         for c in candidates:
+            self._check_stop(should_stop)
             predictive_acc, symbolic_acc, simulation_acc, ood_acc, stress_acc = quick_metrics_cache[c.hypothesis_id]
 
             if disable_verifier:
@@ -414,6 +431,17 @@ class DCTOrchestrator:
             )
 
         return records
+
+    @staticmethod
+    def _check_stop(should_stop: Callable[[], bool] | None) -> None:
+        if should_stop is None:
+            return
+        try:
+            stopping = bool(should_stop())
+        except Exception:  # noqa: BLE001
+            stopping = False
+        if stopping:
+            raise RunCancelledError("Run cancelled by stop request.")
 
     @staticmethod
     def _quick_metrics(task, expression: str) -> tuple[float, float, float, float, float]:
@@ -476,3 +504,7 @@ class DCTOrchestrator:
             callback(payload)
         except Exception:  # noqa: BLE001
             return
+
+
+class RunCancelledError(RuntimeError):
+    pass

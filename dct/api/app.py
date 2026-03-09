@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from dct.config import OPENAI_COMPATIBLE_PROVIDERS, RuntimeSettings, load_experiment_config
 from dct.llm import build_provider
 from dct.memory import SQLiteMemory
-from dct.orchestration import DCTOrchestrator
+from dct.orchestration import DCTOrchestrator, RunCancelledError
 from dct.utils import clamp01, jaccard_similarity, token_set
 
 
@@ -644,7 +644,6 @@ def create_app(output_root: Path) -> FastAPI:
             orchestrator = DCTOrchestrator(settings=settings, provider=provider, memory=memory)
 
             def _progress_callback(event: dict[str, Any]) -> None:
-                _ensure_not_cancelled()
                 _append_job_log(
                     job_id,
                     message=_event_to_log_message(event),
@@ -655,6 +654,7 @@ def create_app(output_root: Path) -> FastAPI:
             summary, run_output_dir = orchestrator.run(
                 exp_config,
                 progress_callback=_progress_callback,
+                should_stop=lambda: _is_cancel_requested(job_id),
             )
             _ensure_not_cancelled()
 
@@ -666,7 +666,7 @@ def create_app(output_root: Path) -> FastAPI:
                 error=None,
             )
             _append_job_log(job_id, f"Job completed: run_name={summary.run_name}")
-        except JobCancelledError:
+        except (JobCancelledError, RunCancelledError):
             _update_job(job_id, status="cancelled", error=None)
             _append_job_log(job_id, "Job cancelled by user", level="warning")
         except Exception as exc:  # noqa: BLE001

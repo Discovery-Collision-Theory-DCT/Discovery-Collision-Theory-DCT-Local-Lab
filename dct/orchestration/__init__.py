@@ -1,3 +1,3 @@
-from dct.orchestration.orchestrator import DCTOrchestrator
+from dct.orchestration.orchestrator import DCTOrchestrator, RunCancelledError
 
-__all__ = ["DCTOrchestrator"]
+__all__ = ["DCTOrchestrator", "RunCancelledError"]
