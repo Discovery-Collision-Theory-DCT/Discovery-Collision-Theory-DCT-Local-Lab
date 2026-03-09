@@ -1,32 +1,34 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 import threading
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from dct.config import RuntimeSettings, load_experiment_config
+from dct.config import OPENAI_COMPATIBLE_PROVIDERS, RuntimeSettings, load_experiment_config
 from dct.llm import build_provider
 from dct.memory import SQLiteMemory
 from dct.orchestration import DCTOrchestrator
+from dct.utils import clamp01, jaccard_similarity, token_set
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class RunRequest(BaseModel):
-    config_path: str | None = None
-    mode: str = "quickstart"
-    output_dir: str | None = None
-    skip_model_check: bool = False
-
+class ProviderRuntimeRequest(BaseModel):
     model_provider: str | None = None
     model_access_mode: str | None = None
     model_name: str | None = None
@@ -43,6 +45,43 @@ class RunRequest(BaseModel):
     google_api_key: str | None = None
 
 
+class RunRequest(ProviderRuntimeRequest):
+    config_path: str | None = None
+    mode: str = "quickstart"
+    output_dir: str | None = None
+    skip_model_check: bool = False
+
+
+class ProviderModelsRequest(ProviderRuntimeRequest):
+    pass
+
+
+class RunExplainRequest(ProviderRuntimeRequest):
+    focus: str | None = None
+
+
+class DiscoveryVector(BaseModel):
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+
+
+class DiscoveryInput(BaseModel):
+    discovery_id: str | None = None
+    title: str = ""
+    expression: str
+    rationale: str = ""
+    confidence: float = 0.5
+    direction: DiscoveryVector = Field(default_factory=DiscoveryVector)
+
+
+class DiscoveryCollisionRequest(ProviderRuntimeRequest):
+    discoveries: list[DiscoveryInput]
+    known_theories: list[str] = Field(default_factory=list)
+    memory_expressions: list[str] = Field(default_factory=list)
+    max_collisions: int = 4
+
+
 class RunJob(BaseModel):
     job_id: str
     status: str
@@ -56,12 +95,285 @@ class RunJob(BaseModel):
     last_event: dict | None = None
 
 
+def _vector_tuple(direction: DiscoveryVector) -> tuple[float, float, float]:
+    return float(direction.x), float(direction.y), float(direction.z)
+
+
+def _vector_norm(v: tuple[float, float, float]) -> float:
+    return math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+
+
+def _directional_complementarity(a: DiscoveryVector, b: DiscoveryVector) -> float:
+    va = _vector_tuple(a)
+    vb = _vector_tuple(b)
+    na = _vector_norm(va)
+    nb = _vector_norm(vb)
+    if na <= 1e-12 or nb <= 1e-12:
+        return 0.5
+    cosine = (va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2]) / (na * nb)
+    cosine = max(-1.0, min(1.0, cosine))
+    return clamp01((1.0 - cosine) / 2.0)
+
+
+def _expression_novelty(expression: str, reference_expressions: list[str]) -> float:
+    if not reference_expressions:
+        return 1.0
+    expr_tokens = token_set(expression)
+    if not expr_tokens:
+        return 0.0
+    sims = [jaccard_similarity(expr_tokens, token_set(ref)) for ref in reference_expressions if ref.strip()]
+    if not sims:
+        return 1.0
+    return clamp01(1.0 - max(sims))
+
+
+def _is_online_runtime(settings: RuntimeSettings) -> bool:
+    return (
+        settings.model_access_mode.strip().lower() == "online"
+        and settings.allow_remote_inference
+        and settings.is_remote_endpoint()
+    )
+
+
+def _sanitize_expression_list(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        expr = str(value or "").strip()
+        if not expr:
+            continue
+        if expr in seen:
+            continue
+        seen.add(expr)
+        out.append(expr)
+    return out
+
+
+def _coerce_confidence(value: Any, default: float = 0.5) -> float:
+    try:
+        return clamp01(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _condense_method_summaries(method_summaries: list[dict]) -> list[dict]:
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for row in method_summaries:
+        method = str(row.get("method", "")).strip()
+        if not method:
+            continue
+        grouped[method].append(row)
+
+    metrics = [
+        "validity_rate",
+        "heldout_predictive_accuracy",
+        "ood_predictive_accuracy",
+        "stress_predictive_accuracy",
+        "transfer_generalization_score",
+        "open_world_readiness_score",
+        "rule_recovery_exact_match_rate",
+        "cumulative_improvement",
+    ]
+
+    condensed: list[dict] = []
+    for method, rows in sorted(grouped.items(), key=lambda x: x[0]):
+        item: dict[str, Any] = {"method": method, "trial_count": len(rows)}
+        for metric in metrics:
+            vals: list[float] = []
+            for row in rows:
+                try:
+                    vals.append(float(row.get(metric, 0.0)))
+                except (TypeError, ValueError):
+                    continue
+            item[metric] = float(sum(vals) / len(vals)) if vals else 0.0
+        condensed.append(item)
+    return condensed
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        value = str(item or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _normalize_model_id(provider: str, raw_model_id: str) -> str:
+    model_id = str(raw_model_id or "").strip()
+    if not model_id:
+        return ""
+    if provider == "gemini" and model_id.startswith("models/"):
+        return model_id.split("/", 1)[1]
+    return model_id
+
+
+def _redact_url(url: str) -> str:
+    try:
+        parts = urlsplit(url)
+    except Exception:  # noqa: BLE001
+        return url
+    query_pairs = parse_qsl(parts.query, keep_blank_values=True)
+    redacted = []
+    for key, value in query_pairs:
+        if key.lower() in {"key", "api_key", "token"} and value:
+            redacted.append((key, "***"))
+        else:
+            redacted.append((key, value))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(redacted), parts.fragment))
+
+
+def _looks_like_reasoner_model(model_name: str) -> bool:
+    low = str(model_name or "").strip().lower()
+    if not low:
+        return False
+    if any(marker in low for marker in ["reasoner", "reasoning", "thinking", "deepseek-r1", "r1-"]):
+        return True
+    if re.search(r"(^|[-_/])r1($|[-_/])", low):
+        return True
+    if re.search(r"(^|[-_/])o[13]($|[-_/])", low):
+        return True
+    if re.search(r"claude-.*thinking", low):
+        return True
+    return False
+
+
+def _split_reasoner_models(models: list[str]) -> tuple[list[str], list[str]]:
+    deduped = _dedupe_preserve_order(models)
+    reasoners = [m for m in deduped if _looks_like_reasoner_model(m)]
+    if not reasoners:
+        reasoners = deduped[: min(12, len(deduped))]
+    return deduped, reasoners
+
+
+def _extract_models_from_openai_payload(payload: dict[str, Any], provider: str) -> list[str]:
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        rows = payload.get("models")
+    if not isinstance(rows, list):
+        rows = []
+
+    out: list[str] = []
+    for row in rows:
+        if isinstance(row, str):
+            model_id = _normalize_model_id(provider, row)
+            if model_id:
+                out.append(model_id)
+            continue
+        if not isinstance(row, dict):
+            continue
+        model_id = row.get("id") or row.get("name") or row.get("model")
+        model_id = _normalize_model_id(provider, str(model_id or ""))
+        if model_id:
+            out.append(model_id)
+    return _dedupe_preserve_order(out)
+
+
+def _extract_models_from_anthropic_payload(payload: dict[str, Any], provider: str) -> list[str]:
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        rows = payload.get("models")
+    if not isinstance(rows, list):
+        rows = []
+
+    out: list[str] = []
+    for row in rows:
+        if isinstance(row, str):
+            model_id = _normalize_model_id(provider, row)
+            if model_id:
+                out.append(model_id)
+            continue
+        if not isinstance(row, dict):
+            continue
+        model_id = row.get("id") or row.get("name")
+        model_id = _normalize_model_id(provider, str(model_id or ""))
+        if model_id:
+            out.append(model_id)
+    return _dedupe_preserve_order(out)
+
+
+def _extract_models_from_gemini_payload(payload: dict[str, Any], provider: str) -> list[str]:
+    rows = payload.get("models")
+    if not isinstance(rows, list):
+        rows = payload.get("data")
+    if not isinstance(rows, list):
+        rows = []
+
+    out: list[str] = []
+    for row in rows:
+        if isinstance(row, str):
+            model_id = _normalize_model_id(provider, row)
+            if model_id:
+                out.append(model_id)
+            continue
+        if not isinstance(row, dict):
+            continue
+        model_id = row.get("name") or row.get("id")
+        model_id = _normalize_model_id(provider, str(model_id or ""))
+        if model_id:
+            out.append(model_id)
+    return _dedupe_preserve_order(out)
+
+
+def _fetch_available_models(settings: RuntimeSettings) -> tuple[list[str], str]:
+    provider = settings.normalized_provider()
+    timeout = max(8.0, min(60.0, float(settings.model_timeout_seconds)))
+
+    with httpx.Client(timeout=timeout) as client:
+        if provider in OPENAI_COMPATIBLE_PROVIDERS:
+            url = f"{settings.openai_base_url.rstrip('/')}/models"
+            response = client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {settings.openai_api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            models = _extract_models_from_openai_payload(payload, provider)
+            return models, _redact_url(url)
+
+        if provider == "anthropic":
+            if not settings.anthropic_api_key.strip():
+                raise ValueError("ANTHROPIC_API_KEY is required for anthropic model listing.")
+            url = f"{settings.anthropic_base_url.rstrip('/')}/v1/models"
+            response = client.get(
+                url,
+                headers={
+                    "x-api-key": settings.anthropic_api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            models = _extract_models_from_anthropic_payload(payload, provider)
+            return models, _redact_url(url)
+
+        if provider == "gemini":
+            if not settings.google_api_key.strip():
+                raise ValueError("GOOGLE_API_KEY is required for gemini model listing.")
+            url = f"{settings.google_base_url.rstrip('/')}/v1beta/models?key={settings.google_api_key}"
+            response = client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+            models = _extract_models_from_gemini_payload(payload, provider)
+            return models, _redact_url(url)
+
+    raise ValueError(f"Unsupported MODEL_PROVIDER for model listing: {provider}")
+
+
 def create_app(output_root: Path) -> FastAPI:
     output_root = output_root.resolve()
     ui_root = Path(__file__).resolve().parents[1] / "ui"
     repo_root = Path(__file__).resolve().parents[2]
+    jobs_state_path = output_root / ".ui_jobs_state.json"
 
-    app = FastAPI(title="DCT Local Dashboard API", version="0.2.0")
+    app = FastAPI(title="DCT Local Dashboard API", version="0.3.0")
     app.mount("/outputs", StaticFiles(directory=str(output_root), check_dir=False), name="outputs")
     if ui_root.exists():
         app.mount("/ui-assets", StaticFiles(directory=str(ui_root), check_dir=True), name="ui-assets")
@@ -69,6 +381,35 @@ def create_app(output_root: Path) -> FastAPI:
     jobs: dict[str, RunJob] = {}
     jobs_lock = threading.Lock()
     model_output_max_chars = 4000
+
+    def _persist_jobs_locked() -> None:
+        output_root.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "saved_at": utc_now(),
+            "jobs": [job.model_dump(mode="json") for job in jobs.values()],
+        }
+        tmp_path = jobs_state_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(jobs_state_path)
+
+    def _load_jobs_from_disk() -> None:
+        if not jobs_state_path.exists():
+            return
+        try:
+            data = json.loads(jobs_state_path.read_text(encoding="utf-8"))
+            rows = data.get("jobs", [])
+            if not isinstance(rows, list):
+                return
+            for item in rows:
+                try:
+                    job = RunJob.model_validate(item)
+                except Exception:  # noqa: BLE001
+                    continue
+                jobs[job.job_id] = job
+        except Exception:  # noqa: BLE001
+            return
+
+    _load_jobs_from_disk()
 
     def _default_config_for_mode(mode: str) -> Path:
         if mode == "quickstart":
@@ -79,8 +420,8 @@ def create_app(output_root: Path) -> FastAPI:
             return repo_root / "config" / "openworld_pathfinder.yaml"
         raise ValueError(f"Unsupported mode: {mode}")
 
-    def _build_runtime_settings(req: RunRequest) -> RuntimeSettings:
-        overrides = {}
+    def _build_runtime_settings(req: ProviderRuntimeRequest) -> RuntimeSettings:
+        overrides: dict[str, Any] = {}
         if req.model_provider is not None:
             overrides["model_provider"] = req.model_provider
         if req.model_access_mode is not None:
@@ -130,11 +471,14 @@ def create_app(output_root: Path) -> FastAPI:
 
     def _update_job(job_id: str, **kwargs) -> None:
         with jobs_lock:
+            if job_id not in jobs:
+                return
             job = jobs[job_id]
             payload = job.model_dump()
             payload.update(kwargs)
             payload["updated_at"] = utc_now()
             jobs[job_id] = RunJob.model_validate(payload)
+            _persist_jobs_locked()
 
     def _append_model_output_log(job_id: str, event: dict) -> None:
         raw_text = str(event.get("text", ""))
@@ -176,6 +520,7 @@ def create_app(output_root: Path) -> FastAPI:
             payload["logs"] = logs[-500:]
             payload["updated_at"] = utc_now()
             jobs[job_id] = RunJob.model_validate(payload)
+            _persist_jobs_locked()
 
     def _event_to_log_message(event: dict) -> str:
         event_type = event.get("type", "event")
@@ -357,6 +702,203 @@ def create_app(output_root: Path) -> FastAPI:
             "artifacts": artifacts,
         }
 
+    @app.post("/api/runs/{run_name}/explain")
+    def explain_run(run_name: str, req: RunExplainRequest) -> dict:
+        summary_path = _find_summary(run_name)
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        settings = _build_runtime_settings(req)
+        policy_error = settings.validate_model_access_policy()
+        if policy_error:
+            raise HTTPException(status_code=400, detail=policy_error)
+        if not _is_online_runtime(settings):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "LLM explanation is only available for online remote providers. "
+                    "Set model_access_mode=online, allow_remote_inference=true, and a non-local base URL."
+                ),
+            )
+
+        method_summaries = summary.get("method_summaries", [])
+        condensed = _condense_method_summaries(method_summaries if isinstance(method_summaries, list) else [])
+
+        payload = {
+            "run_name": summary.get("run_name", run_name),
+            "focus": (req.focus or "overall_dct_performance").strip() or "overall_dct_performance",
+            "condensed_method_summaries": condensed,
+            "uplift": summary.get("uplift", {}),
+            "config": summary.get("config", {}),
+        }
+        system_prompt = (
+            "You are an experiment analyst. "
+            "Explain benchmark outcomes with concrete evidence from the provided metrics. "
+            "Return JSON with keys: executive_summary (string), key_findings (array of strings), "
+            "risks (array of strings), recommended_next_experiments (array of strings), confidence (0..1). "
+            "Do not return markdown."
+        )
+
+        provider = build_provider(settings)
+        try:
+            explanation = provider.generate_json(system_prompt, json.dumps(payload, ensure_ascii=True), max_tokens=1200)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"Failed to generate LLM explanation: {exc}") from exc
+
+        return {
+            "run_name": run_name,
+            "provider": settings.normalized_provider(),
+            "model": settings.model_name,
+            "focus": payload["focus"],
+            "explanation": explanation,
+        }
+
+    @app.post("/api/discovery/collide")
+    def discovery_collide(req: DiscoveryCollisionRequest) -> dict:
+        if len(req.discoveries) < 2:
+            raise HTTPException(status_code=400, detail="At least 2 discoveries are required for collision.")
+
+        settings = _build_runtime_settings(req)
+        policy_error = settings.validate_model_access_policy()
+        if policy_error:
+            raise HTTPException(status_code=400, detail=policy_error)
+
+        max_collisions = max(1, min(12, int(req.max_collisions)))
+        discoveries = []
+        for idx, item in enumerate(req.discoveries):
+            expr = str(item.expression or "").strip()
+            if not expr:
+                continue
+            discovery_id = (item.discovery_id or f"d{idx + 1}").strip()[:80] or f"d{idx + 1}"
+            discoveries.append(
+                {
+                    "discovery_id": discovery_id,
+                    "title": (item.title or "").strip()[:120],
+                    "expression": expr,
+                    "rationale": (item.rationale or "").strip()[:1000],
+                    "confidence": _coerce_confidence(item.confidence),
+                    "direction": item.direction.model_dump(),
+                    "direction_model": item.direction,
+                }
+            )
+        if len(discoveries) < 2:
+            raise HTTPException(status_code=400, detail="Need at least 2 non-empty discovery expressions.")
+
+        pair_scores: list[dict[str, Any]] = []
+        for i in range(len(discoveries)):
+            for j in range(i + 1, len(discoveries)):
+                left = discoveries[i]
+                right = discoveries[j]
+                directional = _directional_complementarity(
+                    left["direction_model"],
+                    right["direction_model"],
+                )
+                expr_diversity = clamp01(
+                    1.0 - jaccard_similarity(token_set(left["expression"]), token_set(right["expression"]))
+                )
+                confidence_mix = clamp01((left["confidence"] + right["confidence"]) / 2.0)
+                pair_strength = clamp01(
+                    0.5 * directional + 0.35 * expr_diversity + 0.15 * confidence_mix
+                )
+                pair_scores.append(
+                    {
+                        "left_id": left["discovery_id"],
+                        "right_id": right["discovery_id"],
+                        "directional_complementarity": directional,
+                        "expression_diversity": expr_diversity,
+                        "confidence_mix": confidence_mix,
+                        "collision_strength": pair_strength,
+                    }
+                )
+
+        pair_scores = sorted(pair_scores, key=lambda p: p["collision_strength"], reverse=True)
+        top_pairs = pair_scores[:max_collisions]
+
+        reference_expressions = _sanitize_expression_list(
+            [d["expression"] for d in discoveries] + req.known_theories + req.memory_expressions
+        )
+        llm_payload = {
+            "discoveries": [
+                {
+                    "discovery_id": d["discovery_id"],
+                    "title": d["title"],
+                    "expression": d["expression"],
+                    "rationale": d["rationale"],
+                    "confidence": d["confidence"],
+                    "direction": d["direction"],
+                }
+                for d in discoveries
+            ],
+            "top_pairs": top_pairs,
+            "known_theories": _sanitize_expression_list(req.known_theories),
+            "memory_expressions": _sanitize_expression_list(req.memory_expressions),
+            "task": (
+                "Synthesize collision hypotheses from multiple discoveries with vector directions and "
+                "estimate whether each candidate is a genuinely new theory."
+            ),
+        }
+        system_prompt = (
+            "You are a scientific hypothesis synthesizer. "
+            "Given discovery vectors and top collision pairs, generate high-quality collision hypotheses. "
+            "Return JSON with key collision_hypotheses (array). "
+            "Each item must contain: title, rule_text, expression, rationale, confidence (0..1), "
+            "source_pair (array of two discovery_ids), is_new_theory (boolean), novelty_reason (string). "
+            "Do not use markdown."
+        )
+
+        provider = build_provider(settings)
+        try:
+            llm_result = provider.generate_json(system_prompt, json.dumps(llm_payload, ensure_ascii=True), max_tokens=1400)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"Collision synthesis failed: {exc}") from exc
+
+        raw_hypotheses = llm_result.get("collision_hypotheses", [])
+        if not isinstance(raw_hypotheses, list):
+            raw_hypotheses = []
+
+        synthesized: list[dict[str, Any]] = []
+        for idx, item in enumerate(raw_hypotheses[:max_collisions]):
+            if not isinstance(item, dict):
+                continue
+            expression = str(item.get("expression", "")).strip()
+            if not expression:
+                continue
+            source_pair = item.get("source_pair", [])
+            if not isinstance(source_pair, list) or len(source_pair) < 2:
+                fallback = top_pairs[idx] if idx < len(top_pairs) else None
+                if fallback is not None:
+                    source_pair = [fallback["left_id"], fallback["right_id"]]
+                else:
+                    source_pair = []
+            novelty_score = _expression_novelty(expression, reference_expressions)
+            llm_is_new = item.get("is_new_theory")
+            if isinstance(llm_is_new, bool):
+                is_new_theory = bool(llm_is_new) and novelty_score >= 0.2
+            else:
+                is_new_theory = novelty_score >= 0.35
+
+            synthesized.append(
+                {
+                    "title": str(item.get("title", f"collision_candidate_{idx + 1}"))[:160],
+                    "rule_text": str(item.get("rule_text", ""))[:400],
+                    "expression": expression,
+                    "rationale": str(item.get("rationale", ""))[:1200],
+                    "confidence": _coerce_confidence(item.get("confidence", 0.5)),
+                    "source_pair": source_pair[:2],
+                    "is_new_theory": is_new_theory,
+                    "novelty_score": novelty_score,
+                    "novelty_reason": str(item.get("novelty_reason", ""))[:400],
+                }
+            )
+
+        return {
+            "provider": settings.normalized_provider(),
+            "model": settings.model_name,
+            "pair_scores": top_pairs,
+            "collision_hypotheses": synthesized,
+            "new_theory_count": len([item for item in synthesized if item["is_new_theory"]]),
+            "reference_expressions_count": len(reference_expressions),
+        }
+
     @app.get("/api/readme")
     def readme() -> dict:
         readme_path = repo_root / "README.md"
@@ -378,6 +920,39 @@ def create_app(output_root: Path) -> FastAPI:
             "openworld_pathfinder": openworld.read_text(encoding="utf-8") if openworld.exists() else "",
         }
 
+    @app.post("/api/provider-models")
+    def provider_models(req: ProviderModelsRequest) -> dict:
+        settings = _build_runtime_settings(req)
+        provider_error = settings.validate_provider_config()
+        if provider_error and "required when MODEL_PROVIDER" not in provider_error:
+            raise HTTPException(status_code=400, detail=provider_error)
+
+        try:
+            models, source_endpoint = _fetch_available_models(settings)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except httpx.HTTPStatusError as exc:
+            detail = (
+                f"Model list endpoint returned {exc.response.status_code}: "
+                f"{exc.response.text[:220]}"
+            )
+            raise HTTPException(status_code=502, detail=detail) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch provider models: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"Failed to fetch provider models: {exc}") from exc
+
+        models, reasoner_models = _split_reasoner_models(models)
+        return {
+            "provider": settings.normalized_provider(),
+            "source_endpoint": source_endpoint,
+            "models": models,
+            "reasoner_models": reasoner_models,
+            "count": len(models),
+            "reasoner_count": len(reasoner_models),
+            "fetched_at": utc_now(),
+        }
+
     @app.post("/api/run")
     def start_run(req: RunRequest) -> dict:
         job_id = f"job_{uuid.uuid4().hex[:10]}"
@@ -391,6 +966,7 @@ def create_app(output_root: Path) -> FastAPI:
         )
         with jobs_lock:
             jobs[job_id] = job
+            _persist_jobs_locked()
         _append_job_log(job_id, "Job queued")
 
         thread = threading.Thread(target=_execute_run_job, args=(job_id, req), daemon=True)

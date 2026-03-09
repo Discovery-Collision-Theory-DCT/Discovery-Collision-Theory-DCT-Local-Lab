@@ -1,253 +1,146 @@
-# Discovery Collision Theory (DCT) Local Lab
+# Project Aletheon - Discovery Collision Theory (DCT) Lab
 
-本项目是一个可本地复现、可审计、可扩展的研究框架。当前版本用于验证以下机制是否在**受控任务**中成立，并把“走向开放世界科学发现能力”作为主线目标：
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
+![License](https://img.shields.io/badge/License-MIT-2EA043)
+![Status](https://img.shields.io/badge/Status-Research%20Framework-F59E0B)
 
-`双轨发现（A/B） + 碰撞合成（Collision） + 多模式验证（Verifier） + 记忆回写（Memory Write-back）`
+一个面向**可复现科学发现机制研究**的本地实验框架。  
+核心目标是验证：
 
-是否优于单轨发现基线。
+`双轨发现 (A/B) -> 碰撞合成 (Collision) -> 多模式验证 (Verifier) -> 记忆回写 (Memory)`
+
+是否在受控任务中优于单轨/朴素融合 baseline。
 
 ---
 
 ## 目录
-
-1. [研究目标](#研究目标)
-2. [主目标升级（开放世界科学发现）](#主目标升级开放世界科学发现)
-3. [科学边界与诚实声明](#科学边界与诚实声明)
-4. [系统架构](#系统架构)
-5. [实验设计](#实验设计)
-6. [指标体系](#指标体系)
-7. [项目结构](#项目结构)
-8. [环境要求](#环境要求)
-9. [快速开始（5分钟）](#快速开始5分钟)
-10. [模型后端配置（主流厂商）](#模型后端配置主流厂商)
-11. [运行实验](#运行实验)
-12. [如何比较 baseline 与 full_dct](#如何比较-baseline-与-full_dct)
-13. [输出与产物说明](#输出与产物说明)
-14. [配置说明](#配置说明)
-15. [Ablation（消融）指南](#ablation消融指南)
-16. [可选本地 API](#可选本地-api)
-17. [测试与质量保证](#测试与质量保证)
-18. [常见问题与故障排查](#常见问题与故障排查)
-19. [复现建议与研究规范](#复现建议与研究规范)
+1. [本次版本重点升级](#本次版本重点升级)
+2. [研究定位与边界](#研究定位与边界)
+3. [核心架构](#核心架构)
+4. [Benchmark 家族](#benchmark-家族)
+5. [指标体系](#指标体系)
+6. [快速开始](#快速开始)
+7. [模型 Provider 配置](#模型-provider-配置)
+8. [CLI 使用](#cli-使用)
+9. [GUI 控制台使用](#gui-控制台使用)
+10. [输出产物与审计](#输出产物与审计)
+11. [配置说明](#配置说明)
+12. [Ablation 指南](#ablation-指南)
+13. [测试与质量保证](#测试与质量保证)
+14. [常见问题](#常见问题)
+15. [项目结构](#项目结构)
+16. [License](#license)
 
 ---
 
-## 研究目标
+## 本次版本重点升级
 
-### DCT 假设
-智能系统的真实自增长，不主要来自单一路径优化；而来自两个或多个上升发现轨迹形成部分独立解释，再通过“碰撞”产生新候选结构，并经验证器过滤后写回记忆，从而提升后续轮次发现质量。
+### 1) GUI Discovery Collider（可自定义向量方向）
+- 支持在 UI 手工填写多个 discovery。
+- 每个 discovery 可配置 `direction(x,y,z)` 向量方向。
+- 系统先做 pair collision scoring，再通过 LLM 生成 collision hypotheses。
+- 自动判定候选是否为“新理论”（含 novelty score 与新理论计数）。
 
-### 本项目验证问题
-在隐藏规则重发现任务中，`full_dct` 是否较以下基线更优：
+### 2) Provider 切换自动补全 Base URL
+- 在 Run Launcher 切换 `model_provider` 时，自动填充对应 `Base URL`：
+  - OpenAI-compatible 系列 -> `openai_base_url`
+  - `anthropic` -> `anthropic_base_url`
+  - `gemini` -> `google_base_url`
+- 同时自动请求 provider 可用模型列表，并填充：
+  - `Model Name`
+  - `Reasoner Model Name`
 
-- `baseline_single_a`: 仅 A 轨迹 + 验证
-- `baseline_single_b`: 仅 B 轨迹 + 验证
-- `baseline_merged_naive`: A/B 结果直接拼接（无碰撞逻辑）
+### 3) Experiment Runs 支持 LLM 结果解释（仅在线模式）
+- Run Detail 新增 `Explain This Run`。
+- 仅当满足以下条件时允许调用：
+  - `model_access_mode=online`
+  - `allow_remote_inference=true`
+  - 使用远程 URL（非 localhost）
+- 后端接口：`POST /api/runs/{run_name}/explain`
 
----
-
-## 主目标升级（开放世界科学发现）
-
-你提出的三项要求，现定义为本项目的**最主要长期目标**：
-
-1. 证明系统可自动发现现实世界中的根本科学定律。  
-2. 证明系统具备超越任务设计边界的通用科学自主性。  
-3. 证明实验结果可直接迁移到高噪声、开放世界问题。  
-
-工程上，这意味着项目从“受控 benchmark 有效性”升级为“分阶段证据累积计划”。当前代码库首先解决阶段 1（受控任务机制有效），并为后续阶段提供可审计基础设施（轨迹、碰撞、验证、记忆、日志、可复现）。
-
----
-
-## 科学边界与诚实声明
-
-### What this validates
-- 验证 DCT 机制在合成、可控、可评分任务上的有效性。
-- 验证“记忆回写”是否改善后续轮次表现。
-- 验证“碰撞合成”是否优于朴素拼接。
-
-### What this does NOT prove (当前版本)
-- **当前版本尚不能证明**系统可自动发现现实世界中的根本科学定律。
-- **当前版本尚不能证明**超越任务设计边界的通用科学自主性。
-- **当前版本尚不能证明**实验结果可直接迁移到高噪声、开放世界问题。
-
-### 何时才可宣称“已证明”
-必须满足以下条件（缺一不可）：
-
-1. 跨领域真实任务验证  
-- 在多个真实科学领域（如材料、生物、控制、天体）完成盲测任务，并由领域专家独立复核。
-
-2. Out-of-distribution 泛化证据  
-- 在训练任务分布外保持稳定发现能力，且显著优于强基线与人类启发式流程。
-
-3. 开放世界噪声与干预鲁棒性  
-- 在缺失、噪声、偏差、分布漂移、对抗干预条件下，结论仍可复现并通过外部验证。
-
-4. 外部可重复与第三方复验  
-- 独立团队使用不同实现与数据管线可重复主要结论，误差区间可接受。
-
-5. 失败案例与边界公开  
-- 必须公开失败类型、失效边界、负结果占比，避免仅展示成功样本导致误判。
+### 4) 任务进度自动保存
+- Run Jobs 状态与日志会自动持久化到：
+  - `outputs/.ui_jobs_state.json`
+- 控制台刷新/重启后可恢复已完成与历史任务进度。
+- 前端同时会本地保存表单与 Collider 草稿状态。
 
 ---
 
-## 系统架构
+## 研究定位与边界
 
-### 模块分工
+### 本仓库当前可以验证
+- DCT 机制在合成、可控、可评分任务上的有效性。
+- 碰撞合成是否优于 `A/B` 结果朴素拼接。
+- 记忆回写是否改善后续轮次表现。
 
-- `trajectory_a`：归纳/压缩偏置（模式、符号规律）
-- `trajectory_b`：机制/反事实偏置（因果解释、干预敏感）
-- `collision_engine`：检测重叠/矛盾/互补并合成候选
-- `verifier`：多模式验证（predictive / symbolic / simulation）
-- `memory`：SQLite 持久化（候选、验证、接受理论、谱系）
-- `orchestrator`：迭代控制循环
+### 本仓库当前不能宣称
+- 不能证明已自动发现现实世界根本科学定律。
+- 不能证明已具备跨领域开放世界通用科学自主性。
+- 不能证明可直接迁移到高噪声真实工业/科研场景。
 
-### 执行流程
+---
 
-```text
-observe
-  -> trajectory_a proposes hypotheses
-  -> trajectory_b proposes hypotheses
-  -> collision_engine synthesizes collision hypotheses
-  -> verifier evaluates candidates
-  -> accept / reject
-  -> memory write-back
-  -> next round
+## 核心架构
+
+```mermaid
+flowchart LR
+    O[Observations] --> A[Trajectory A]
+    O --> B[Trajectory B]
+    A --> C[Collision Engine]
+    B --> C
+    C --> V[Verifier: predictive/symbolic/simulation]
+    V --> M[Memory: SQLite]
+    M --> N[Next Round]
 ```
 
-### 碰撞评分维度（已实现）
-
-- `structural_complementarity`
-- `predictive_overlap`
-- `explanatory_gain`
-- `novelty`（相对 memory）
-- `collision_strength`（加权汇总）
+### 关键模块
+- `dct/agents/trajectory_a.py`：归纳/压缩偏置发现轨迹
+- `dct/agents/trajectory_b.py`：机制/反事实偏置发现轨迹
+- `dct/agents/collision_engine.py`：A/B 假设碰撞合成
+- `dct/agents/verifier.py`：多模式验证
+- `dct/orchestration/orchestrator.py`：迭代编排
+- `dct/memory/sqlite_store.py`：记忆持久化
+- `dct/api/app.py`：Dashboard API + UI
 
 ---
 
-## 实验设计
+## Benchmark 家族
 
-### Benchmark Families（6类）
-
-1. Hidden symbolic rule discovery
-- 整数映射、布尔规则、代数映射等隐藏规则重建。
-
-2. Hidden dynamical system discovery
-- 局部元胞更新、图传播阈值、有限状态转移规则。
-
-3. Theory compression / rediscovery
-- 噪声观测下恢复更简洁、更接近真实生成规则的解释。
-
-4. Real-world law rediscovery
-- 从真实世界观测近似数据中重发现经典规律（如 Kepler-like、pendulum-like）。
-
-5. Autonomy generalization benchmark
-- 在伪相关特征漂移、尺度变化和机制不变条件下测试自主泛化。
-
-6. Open-world high-noise benchmark
-- 在异方差噪声、离群点和分布漂移下测试规则迁移与鲁棒性。
-
-### Baselines
-
-- `baseline_single_a`
-- `baseline_single_b`
-- `baseline_merged_naive`
-- `full_dct`
-
-### 轮次与试验
-
-- `quickstart`: 轻量、适合笔记本快速验证。
-- `full_experiment`: 多 trial 与更多轮次，适合统计比较。
-- `openworld_pathfinder`: 面向开放世界目标的专项配置（真实规律+泛化+高噪声）。
+- `symbolic`：符号/布尔/代数规则重建
+- `dynamical`：局部转移、图传播、有限状态更新
+- `compression`：噪声观测下恢复紧凑表达式
+- `real_world_laws`：Kepler-like、pendulum-like 规律重发现
+- `autonomy_generalization`：伪相关漂移、尺度变化与机制不变泛化
+- `open_world_noise`：异方差噪声、离群点与分布漂移鲁棒性
 
 ---
 
 ## 指标体系
 
-本项目报告以下指标（对应代码真实行为）：
+主报告指标（`method_summaries.csv` / `summary.json`）：
 
-1. `validity_rate`
-- 通过验证且被接受候选的比例。
+- `validity_rate`
+- `heldout_predictive_accuracy`
+- `ood_predictive_accuracy`
+- `stress_predictive_accuracy`
+- `transfer_generalization_score`
+- `open_world_readiness_score`
+- `rule_recovery_exact_match_rate`
+- `compression_score`
+- `novelty_score`
+- `time_to_valid_discovery`
+- `cumulative_improvement`
 
-2. `heldout_predictive_accuracy`
-- 每轮 top 表现在 held-out 上的平均精度。
+关键组合公式（代码实现）：
 
-3. `ood_predictive_accuracy`
-- 分布外（OOD）样本上的平均精度。
-
-4. `stress_predictive_accuracy`
-- 高噪声/离群/漂移压力集上的平均精度。
-
-5. `transfer_generalization_score`
-- 迁移能力分数（heldout 与 OOD 的组合指标）。
-
-6. `open_world_readiness_score`
-- 开放世界准备度（heldout/OOD/stress 组合指标）。
-
-7. `rule_recovery_exact_match_rate`
-- 被接受候选中，表达式与真值表达式规范化后完全相等的比例。
-
-8. `compression_score`
-- 以表达式长度为代理：`1 / (1 + len(expression))`。
-
-9. `novelty_score`
-- 候选与 memory 表达式 token Jaccard 相似度反向量。
-
-10. `time_to_valid_discovery`
-- 首次出现有效接受候选的 round index；若无则置为 `round_count + 1`。
-
-11. `cumulative_improvement`
-- 按轮次累计“最优 held-out 精度的净提升”。
-
-12. `uplift`
-- `full_dct` 相对各 baseline 的差值（含 heldout/OOD/stress/transfer/open-world 指标）。
+- `transfer_score = 0.5 * predictive + 0.5 * ood`
+- `open_world_score = 0.35 * predictive + 0.35 * ood + 0.30 * stress`
 
 ---
 
-## 项目结构
+## 快速开始
 
-```text
-.
-├── dct/
-│   ├── agents/          # A/B 轨迹、collision、verifier
-│   ├── benchmarks/      # synthetic + real_world_laws + autonomy + open_world_noise
-│   ├── llm/             # OpenAI-compatible provider
-│   ├── memory/          # SQLite 持久化
-│   ├── orchestration/   # 实验编排与 baseline
-│   ├── reporting/       # CSV/JSON 写出 + plotting
-│   ├── prompts/         # 可编辑 prompt 模板
-│   ├── api/             # 可选 FastAPI
-│   ├── cli.py           # Typer CLI
-│   └── config.py        # env + yaml 配置加载
-├── config/
-│   ├── quickstart.yaml
-│   ├── full_experiment.yaml
-│   └── openworld_pathfinder.yaml
-├── scripts/
-├── tests/
-└── reports/example_report.md
-```
-
----
-
-## 环境要求
-
-- Python `3.11+`
-- 主流模型服务（OpenAI-compatible / Anthropic / Gemini）
-- 默认推荐：Ollama（本地模式）
-
-运行模式：
-- `MODEL_ACCESS_MODE=local`：仅允许本地 endpoint（默认）
-- `MODEL_ACCESS_MODE=online`：允许在线 API endpoint（需显式授权）
-
-说明：
-- 项目默认仍是“本地优先”。
-- 若使用在线 API，必须显式开启 `ALLOW_REMOTE_INFERENCE=true`。
-
----
-
-## 快速开始（5分钟）
-
-### 1) 创建虚拟环境并安装
+### 1) 安装
 
 ```bash
 cd /Users/lihiko/repo/research/ProjectAletheon
@@ -258,111 +151,66 @@ pip install -e '.[dev]'
 cp .env.example .env
 ```
 
-### 2) 启动 Ollama
+### 2) 本地模型示例（Ollama）
 
 ```bash
 # Terminal A
 ollama serve
-```
 
-```bash
 # Terminal B
 ollama pull deepseek-r1:70b
-dct check-model
+./.venv/bin/dct check-model
 ```
 
-### 3) 跑 quickstart
+### 3) 跑最小实验
 
 ```bash
-dct quickstart
-# 或
-python -m dct.cli quickstart
+./.venv/bin/dct quickstart
 ```
 
 ---
 
-## 模型后端配置（主流厂商）
+## 模型 Provider 配置
 
-项目已支持多 provider 路由，分两类：
+### OpenAI-compatible 家族
+`openai_compatible/openai/xai/deepseek/groq/mistral/together/fireworks/openrouter/ollama/lmstudio/vllm/llamacpp/...`
 
-1. OpenAI-compatible 家族（统一走 `/chat/completions`）
-- `openai_compatible`（通用）
-- `openai`
-- `azure_openai`
-- `xai`
-- `deepseek`
-- `groq`
-- `mistral`
-- `together`
-- `fireworks`
-- `openrouter`
-- `ollama`
-- `lmstudio`
-- `vllm`
-- `llamacpp`
+- 统一使用：
+  - `OPENAI_BASE_URL`
+  - `OPENAI_API_KEY`
 
-2. 原生 API
-- `anthropic`（Claude）
-- `gemini`（Google Gemini）
+### 原生 API
+- `anthropic`
+  - `ANTHROPIC_BASE_URL`
+  - `ANTHROPIC_API_KEY`
+- `gemini`
+  - `GOOGLE_BASE_URL`
+  - `GOOGLE_API_KEY`
 
-核心控制变量：
-- `MODEL_PROVIDER`
-- `MODEL_ACCESS_MODE`（`local` 或 `online`）
-- `ALLOW_REMOTE_INFERENCE`（`true/false`）
-- `MODEL_NAME`
-- `MODEL_TEMPERATURE`
-- `MODEL_TIMEOUT_SECONDS`
+### 访问策略（强约束）
+- `MODEL_ACCESS_MODE=local|online`
+- 若 Base URL 为远程地址：
+  - 必须 `MODEL_ACCESS_MODE=online`
+  - 必须 `ALLOW_REMOTE_INFERENCE=true`
 
-### 默认本地模式（推荐）
+---
 
-```env
-MODEL_PROVIDER=openai_compatible
-MODEL_ACCESS_MODE=local
-ALLOW_REMOTE_INFERENCE=false
-OPENAI_BASE_URL=http://localhost:11434/v1
-OPENAI_API_KEY=ollama
-MODEL_NAME=deepseek-r1:70b
-```
-
-### 在线 OpenAI-compatible 示例（OpenAI / xAI / DeepSeek / Groq / Mistral / OpenRouter）
-
-```env
-MODEL_PROVIDER=openai
-MODEL_ACCESS_MODE=online
-ALLOW_REMOTE_INFERENCE=true
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_API_KEY=sk-...
-MODEL_NAME=gpt-5-mini
-```
-
-### 在线 Anthropic 示例
-
-```env
-MODEL_PROVIDER=anthropic
-MODEL_ACCESS_MODE=online
-ALLOW_REMOTE_INFERENCE=true
-ANTHROPIC_BASE_URL=https://api.anthropic.com
-ANTHROPIC_API_KEY=sk-ant-...
-MODEL_NAME=claude-sonnet-4-5
-```
-
-### 在线 Gemini 示例
-
-```env
-MODEL_PROVIDER=gemini
-MODEL_ACCESS_MODE=online
-ALLOW_REMOTE_INFERENCE=true
-GOOGLE_BASE_URL=https://generativelanguage.googleapis.com
-GOOGLE_API_KEY=AIza...
-MODEL_NAME=gemini-2.5-pro
-```
-
-### CLI 覆盖方式
-
-OpenAI-compatible:
+## CLI 使用
 
 ```bash
-dct run --config config/quickstart.yaml \
+./.venv/bin/dct --help
+./.venv/bin/dct check-model
+./.venv/bin/dct run --config config/quickstart.yaml
+./.venv/bin/dct run --config config/full_experiment.yaml
+./.venv/bin/dct run --config config/openworld_pathfinder.yaml
+./.venv/bin/dct openworld
+```
+
+在线 API 示例（OpenAI）：
+
+```bash
+./.venv/bin/dct run \
+  --config config/quickstart.yaml \
   --model-provider openai \
   --model-access-mode online \
   --allow-remote-inference \
@@ -371,152 +219,68 @@ dct run --config config/quickstart.yaml \
   --model-name gpt-5-mini
 ```
 
-Anthropic:
+---
+
+## GUI 控制台使用
+
+### 启动
 
 ```bash
-dct run --config config/quickstart.yaml \
-  --model-provider anthropic \
-  --model-access-mode online \
-  --allow-remote-inference \
-  --anthropic-api-key "$ANTHROPIC_API_KEY" \
-  --model-name claude-sonnet-4-5
+./.venv/bin/dct serve --output-root outputs --host 127.0.0.1 --port 8000
 ```
 
-Gemini:
+打开：`http://127.0.0.1:8000/`
 
-```bash
-dct run --config config/quickstart.yaml \
-  --model-provider gemini \
-  --model-access-mode online \
-  --allow-remote-inference \
-  --google-api-key "$GOOGLE_API_KEY" \
-  --model-name gemini-2.5-pro
-```
+### Run Launcher
+- 选择 mode/provider/model。
+- Provider 切换时会自动补齐对应 Base URL。
+- Provider/base-url/key 变化后会自动拉取可用模型，供 `Model Name` 与 `Reasoner Model Name` 选择（仍可手动输入）。
+- 支持 reasoner 开关与模型名覆盖。
+
+### Experiment Runs
+- 查看 method summary、uplift、plots、artifacts。
+- 使用 `Explain This Run` 触发在线 LLM 解释：
+  - 仅在线远程 provider 可用。
+
+### Realtime Model Stream
+- 查看 job 运行日志与模型原始输出流。
+
+### Discovery Collider（新增）
+- 新增独立标签页。
+- 填写多个 discovery（表达式、置信度、向量方向）。
+- 通过 LLM collision 生成新候选理论。
+- 返回 `is_new_theory`、`novelty_score`、`new_theory_count`。
+
+### 进度自动保存（新增）
+- job 进度自动写入 `outputs/.ui_jobs_state.json`。
+- 前端状态（表单、当前选择、collider 草稿）自动保存并恢复。
 
 ---
 
-## 运行实验
+## 输出产物与审计
 
-### Quickstart（轻量）
-
-```bash
-dct run --config config/quickstart.yaml
-```
-
-默认参数：
-- trials: 1
-- rounds: 2
-- hypotheses_per_trajectory: 2
-- families: symbolic/real_world_laws/open_world_noise
-
-### Full Experiment（更稳健统计）
-
-```bash
-dct run --config config/full_experiment.yaml
-```
-
-默认参数：
-- trials: 3
-- rounds: 6
-- hypotheses_per_trajectory: 4
-- families: symbolic/dynamical/compression/real_world_laws/autonomy_generalization/open_world_noise
-
-### OpenWorld Pathfinder（主目标专项）
-
-```bash
-dct run --config config/openworld_pathfinder.yaml
-# 或
-dct openworld
-```
-
-### 可用 CLI
-
-```bash
-dct --help
-dct check-model
-dct check-model --model-provider openai --model-access-mode online --allow-remote-inference --openai-base-url https://api.openai.com/v1 --openai-api-key "$OPENAI_API_KEY" --model-name gpt-5-mini
-dct check-model --model-provider anthropic --model-access-mode online --allow-remote-inference --anthropic-api-key "$ANTHROPIC_API_KEY" --model-name claude-sonnet-4-5
-dct check-model --model-provider gemini --model-access-mode online --allow-remote-inference --google-api-key "$GOOGLE_API_KEY" --model-name gemini-2.5-pro
-dct quickstart
-dct openworld
-dct run --config config/quickstart.yaml
-dct run --config config/full_experiment.yaml
-dct run --config config/openworld_pathfinder.yaml
-dct run --config config/quickstart.yaml --model-provider openai --model-access-mode online --allow-remote-inference --openai-base-url https://api.openai.com/v1 --openai-api-key "$OPENAI_API_KEY" --model-name gpt-5-mini
-dct run --config config/quickstart.yaml --model-provider anthropic --model-access-mode online --allow-remote-inference --anthropic-api-key "$ANTHROPIC_API_KEY" --model-name claude-sonnet-4-5
-dct run --config config/quickstart.yaml --model-provider gemini --model-access-mode online --allow-remote-inference --google-api-key "$GOOGLE_API_KEY" --model-name gemini-2.5-pro
-dct serve --output-root outputs --host 127.0.0.1 --port 8000
-```
-
----
-
-## 如何比较 baseline 与 full_dct
-
-### 方法 1：直接查看 uplift
-
-运行后查看：
-
-- `outputs/.../<run_name>/summary.json`
-
-其中 `uplift` 为 `full_dct - baseline`，正值代表 full_dct 更优。
-
-### 方法 2：看方法级汇总表
-
-- `method_summaries.csv`
-
-重点比较：
-- `validity_rate`
-- `heldout_predictive_accuracy`
-- `ood_predictive_accuracy`
-- `stress_predictive_accuracy`
-- `transfer_generalization_score`
-- `open_world_readiness_score`
-- `rule_recovery_exact_match_rate`
-- `cumulative_improvement`
-
-### 方法 3：看图
-
-- `plots/method_accuracy.png`
-- `plots/method_validity.png`
-- `plots/open_world_metrics.png`
-- `plots/cumulative_improvement.png`
-- `plots/family_*_accuracy.png`
-
----
-
-## 输出与产物说明
-
-每次运行会生成目录：
+每次运行输出目录：
 
 `<output_dir>/<run_name>/`
 
 关键文件：
+- `summary.json`
+- `method_summaries.csv`
+- `candidate_logs.csv`
+- `round_summaries.jsonl`
+- `plots/*.png`
 
-- `summary.json`：总结果 + uplift
-- `method_summaries.csv`：方法级指标
-- `candidate_logs.csv`：候选级日志（每条假设）
-- `round_summaries.jsonl`：轮次级记录
-- `plots/*.png`：可视化图
-
-### SQLite 记忆库
-
-默认数据库：
+默认记忆库：
 - `outputs/dct_memory.db`
-
-记录内容：
-- observations
-- hypotheses
-- verifications
-- accepted_theories
-- lineage
 
 ---
 
 ## 配置说明
 
 ### `.env`（运行时）
-
 - `MODEL_PROVIDER`
+- `MODEL_ACCESS_MODE`
+- `ALLOW_REMOTE_INFERENCE`
 - `OPENAI_BASE_URL`
 - `OPENAI_API_KEY`
 - `ANTHROPIC_BASE_URL`
@@ -526,15 +290,11 @@ dct serve --output-root outputs --host 127.0.0.1 --port 8000
 - `MODEL_NAME`
 - `MODEL_TEMPERATURE`
 - `MODEL_TIMEOUT_SECONDS`
-- `MODEL_ACCESS_MODE`
-- `ALLOW_REMOTE_INFERENCE`
 - `DCT_OUTPUT_DIR`
 - `DCT_SQLITE_PATH`
 - `DCT_CHECK_MODEL_ON_START`
 
 ### YAML（实验）
-
-核心字段：
 - `seed`
 - `trials`
 - `rounds`
@@ -549,9 +309,7 @@ dct serve --output-root outputs --host 127.0.0.1 --port 8000
 
 ---
 
-## Ablation（消融）指南
-
-在 config 中配置：
+## Ablation 指南
 
 ```yaml
 ablation:
@@ -561,143 +319,86 @@ ablation:
   single_verifier_mode_only: null
 ```
 
-### 常见消融组合
-
-1. 禁用碰撞
-```yaml
-no_collision: true
-```
-
-2. 禁用记忆回写
-```yaml
-no_memory_write_back: true
-```
-
-3. 禁用验证器（仅保留快速打分选优）
-```yaml
-no_verifier: true
-```
-
-4. 只保留单一验证模式
-```yaml
-single_verifier_mode_only: predictive
-```
-
----
-
-## 可选本地 API
-
-启动：
-
-```bash
-dct serve --output-root outputs --host 127.0.0.1 --port 8000
-```
-
-打开 UI 控制台：
-
-- `http://127.0.0.1:8000/`
-
-UI 可覆盖：
-- 实验启动（provider/model/access mode/config/temp/use_reasoner）
-- 运行作业状态（queued/running/completed/failed）
-- 中间面板第二标签：Realtime Model Stream（实时模型原始输出）
-- run 详情（method summary、uplift、plots、artifacts）
-- README 与 quick/full 配置内容浏览
-
-接口：
-- `GET /health`
-- `GET /runs`
-- `GET /runs/{run_name}`
-- `GET /latest`
-- `POST /api/run`
-- `GET /api/jobs`
-- `GET /api/runs/{run_name}/artifacts`
+常见组合：
+- 禁用碰撞：`no_collision: true`
+- 禁用记忆回写：`no_memory_write_back: true`
+- 禁用验证器：`no_verifier: true`
+- 单验证模式：`single_verifier_mode_only: predictive`
 
 ---
 
 ## 测试与质量保证
 
-运行测试：
-
 ```bash
-pytest
+./.venv/bin/pytest -q
 ```
 
-当前测试覆盖：
+覆盖范围包括：
 - benchmark 生成
-- collision 产出
-- verifier 多模式结构化输出
+- provider 路由与 JSON 鲁棒性
+- collision / verifier 逻辑
 - orchestrator 端到端（fake provider）
+- API + UI 接口
+- 新增：run explain / discovery collide / jobs 持久化
 
 ---
 
-## 常见问题与故障排查
+## 常见问题
 
-### 1) `dct` 命令找不到
-
-```bash
-python -m dct.cli quickstart
-```
-
-或确认已执行：
+### `dct` 命令找不到
+使用：
 
 ```bash
-pip install -e '.[dev]'
+./.venv/bin/dct quickstart
 ```
 
-### 2) 模型不可达
-
-先检查：
+或：
 
 ```bash
-dct check-model
+./.venv/bin/python -m dct.cli quickstart
 ```
 
-若失败：
-- 本地模式（Ollama）：`ollama serve`、`ollama pull deepseek-r1:70b`、`curl http://localhost:11434/v1/models`
-- 在线模式：检查 `MODEL_PROVIDER` 对应 API key 与 base URL 是否正确
-- 再次执行：`dct check-model`
-
-### 3) 模型输出 JSON 不稳定
-
-建议：
-- 降低 `MODEL_TEMPERATURE`（例如 `0.1`）
-- 使用更稳定的模型（本地或在线）
-- 保持 prompt 模板严格 JSON 输出
-
-### 4) zsh 安装报 `no matches found: .[dev]`
-
-用引号：
+### 模型不可达
+先执行：
 
 ```bash
-pip install -e '.[dev]'
+./.venv/bin/dct check-model
 ```
+
+再检查 provider 对应的 base URL / API key / access mode 配置。
+
+### 在线解释按钮不可用
+请确认：
+- `model_access_mode=online`
+- `allow_remote_inference=true`
+- Base URL 不是 `localhost/127.0.0.1`
 
 ---
 
-## 复现建议与研究规范
+## 项目结构
 
-- 固定 `seed`、模型版本、配置文件。
-- 保留完整 `outputs/<run_name>/` 目录用于审计。
-- 比较结果时以多 trial 平均值为主，单次 run 仅作定性参考。
-- 若跨模型比较，建议每模型单独多次运行并统一配置。
-
----
-
-## 附：示例报告
-
-项目提供示例报告模板：
-
-- `reports/example_report.md`
-
-用于组织以下内容：
-- 实验设置
-- 核心表格
-- uplift 解读
-- 科学边界声明
+```text
+.
+├── dct/
+│   ├── agents/
+│   ├── benchmarks/
+│   ├── llm/
+│   ├── memory/
+│   ├── orchestration/
+│   ├── reporting/
+│   ├── api/
+│   ├── ui/
+│   ├── prompts/
+│   ├── cli.py
+│   └── config.py
+├── config/
+├── tests/
+├── reports/
+└── README.md
+```
 
 ---
 
 ## License
 
-This project is licensed under the MIT License. See `LICENSE` for details.
+MIT License. See `LICENSE`.

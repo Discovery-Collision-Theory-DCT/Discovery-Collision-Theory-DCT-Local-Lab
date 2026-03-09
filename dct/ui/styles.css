@@ -125,6 +125,12 @@ body {
   margin-top: -4px;
 }
 
+.sub.compact {
+  margin-top: 0;
+  margin-bottom: 4px;
+  font-size: 0.8rem;
+}
+
 form {
   display: grid;
   gap: 10px;
@@ -148,7 +154,8 @@ textarea {
 }
 
 input,
-select {
+select,
+textarea {
   border-radius: 10px;
   border: 1px solid var(--line);
   background: rgba(8, 13, 24, 0.75);
@@ -156,10 +163,20 @@ select {
   padding: 9px 11px;
 }
 
+textarea {
+  resize: vertical;
+}
+
 .grid.two {
   display: grid;
   gap: 10px;
   grid-template-columns: 1fr 1fr;
+}
+
+.grid.three {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(3, minmax(60px, 1fr));
 }
 
 .toggles {
@@ -272,6 +289,21 @@ select {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 10px;
+}
+
+.inline-actions {
+  display: flex;
+  align-items: end;
+  justify-content: flex-end;
+  padding-bottom: 2px;
+}
+
+.discoveries-list {
+  max-height: 360px;
+}
+
+.discovery-item .grid.three input {
+  text-align: center;
 }
 
 .run-detail.hidden {
@@ -438,6 +470,10 @@ th {
   }
 
   .grid.two {
+    grid-template-columns: 1fr;
+  }
+
+  .grid.three {
     grid-template-columns: 1fr;
   }
 }
