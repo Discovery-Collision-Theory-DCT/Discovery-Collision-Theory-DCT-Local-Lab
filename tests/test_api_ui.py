@@ -27,6 +27,7 @@ def test_ui_and_run_listing(tmp_path: Path):
     assert index_resp.status_code == 200
     assert "DCT Control Surface" in index_resp.text
     assert "Realtime Model Stream" in index_resp.text
+    assert "Stop Current Job" in index_resp.text
 
     runs_resp = client.get("/api/runs")
     assert runs_resp.status_code == 200

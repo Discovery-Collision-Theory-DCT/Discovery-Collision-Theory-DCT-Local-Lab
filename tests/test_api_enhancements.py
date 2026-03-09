@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from dct.api.app import create_app
+from dct.config import ExperimentConfig
 
 
 class _DummyProvider:
@@ -178,6 +179,84 @@ def test_jobs_are_persisted_to_disk(tmp_path: Path):
     jobs = client2.get("/api/jobs").json()
     ids = {job["job_id"] for job in jobs}
     assert job_id in ids
+
+
+def test_stop_job_cancels_running_job(monkeypatch, tmp_path: Path):
+    class _SlowOrchestrator:
+        def __init__(self, settings, provider, memory):
+            self.settings = settings
+            self.provider = provider
+            self.memory = memory
+
+        def run(self, exp_config, progress_callback=None):
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "type": "run_started",
+                        "run_name": "slow_run",
+                        "baselines": ["baseline_single_a"],
+                        "trials": 1,
+                        "rounds": 1,
+                    }
+                )
+            for i in range(120):
+                time.sleep(0.01)
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "type": "task_started",
+                            "method": "baseline_single_a",
+                            "trial_index": 0,
+                            "round_index": i,
+                            "family": "symbolic",
+                        }
+                    )
+
+            class _Summary:
+                run_name = "slow_run"
+
+            return _Summary(), Path(exp_config.output_dir) / "slow_run"
+
+    config_path = tmp_path / "dummy.yaml"
+    config_path.write_text("name: dummy\n", encoding="utf-8")
+
+    monkeypatch.setattr("dct.api.app.build_provider", lambda settings: _DummyProvider())
+    monkeypatch.setattr("dct.api.app.load_experiment_config", lambda path: ExperimentConfig(output_dir=tmp_path / "runs"))
+    monkeypatch.setattr("dct.api.app.DCTOrchestrator", _SlowOrchestrator)
+
+    app = create_app(tmp_path)
+    client = TestClient(app)
+
+    run_resp = client.post(
+        "/api/run",
+        json={
+            "mode": "quickstart",
+            "config_path": str(config_path),
+            "skip_model_check": True,
+            "model_provider": "openai_compatible",
+            "model_access_mode": "local",
+            "openai_base_url": "http://localhost:11434/v1",
+        },
+    )
+    assert run_resp.status_code == 200
+    job_id = run_resp.json()["job_id"]
+
+    stop_resp = client.post(f"/api/jobs/{job_id}/stop")
+    assert stop_resp.status_code == 200
+    assert stop_resp.json()["status"] in {"stopping", "cancelled"}
+
+    final = None
+    for _ in range(80):
+        payload = client.get(f"/api/jobs/{job_id}").json()
+        if payload["status"] in {"cancelled", "failed", "completed"}:
+            final = payload
+            break
+        time.sleep(0.05)
+
+    assert final is not None
+    assert final["status"] == "cancelled"
+    assert final.get("error") in (None, "")
+    assert any("Stop requested by user" in str(item.get("message", "")) for item in final.get("logs", []))
 
 
 def test_provider_models_endpoint_returns_model_and_reasoner_lists(monkeypatch, tmp_path: Path):

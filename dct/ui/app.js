@@ -36,6 +36,8 @@ const els = {
   progressBadge: document.getElementById("progress-badge"),
   refreshAll: document.getElementById("refresh-all"),
   runForm: document.getElementById("run-form"),
+  startRunBtn: document.getElementById("start-run-btn"),
+  stopCurrentJobBtn: document.getElementById("stop-current-job-btn"),
   providerHint: document.getElementById("provider-url-hint"),
   modelFetchHint: document.getElementById("model-fetch-hint"),
   modelNameOptions: document.getElementById("model-name-options"),
@@ -447,8 +449,57 @@ function updateProgressBadge(jobs) {
   if (!hasElement(els.progressBadge)) return;
   const completed = jobs.filter((job) => job.status === "completed").length;
   const running = jobs.filter((job) => job.status === "running").length;
+  const stopping = jobs.filter((job) => job.status === "stopping").length;
+  const cancelled = jobs.filter((job) => job.status === "cancelled").length;
   const failed = jobs.filter((job) => job.status === "failed").length;
-  els.progressBadge.textContent = `Progress: ${completed} done | ${running} running | ${failed} failed`;
+  els.progressBadge.textContent = `Progress: ${completed} done | ${running} running | ${stopping} stopping | ${cancelled} cancelled | ${failed} failed`;
+}
+
+function canStopJob(job) {
+  if (!job || typeof job !== "object") return false;
+  return job.status === "queued" || job.status === "running" || job.status === "stopping";
+}
+
+function selectedJobFromLatest() {
+  if (!Array.isArray(latestJobs) || !latestJobs.length) return null;
+  return latestJobs.find((j) => j.job_id === currentJobId) || latestJobs[0] || null;
+}
+
+function updateRunActionButtons(jobs = latestJobs) {
+  if (!hasElement(els.stopCurrentJobBtn)) return;
+  const selected = Array.isArray(jobs)
+    ? jobs.find((j) => j.job_id === currentJobId) || jobs[0] || null
+    : null;
+  const stoppable = canStopJob(selected);
+  els.stopCurrentJobBtn.disabled = !stoppable;
+  els.stopCurrentJobBtn.textContent = selected?.status === "stopping" ? "Stopping..." : "Stop Current Job";
+}
+
+async function requestStopJob(jobId) {
+  if (!jobId) return;
+  try {
+    const updated = await api(`/api/jobs/${encodeURIComponent(jobId)}/stop`, {
+      method: "POST",
+    });
+    currentJobId = updated.job_id || jobId;
+    persistUIState();
+    await loadJobs();
+  } catch (err) {
+    alert(`Failed to stop job: ${err.message}`);
+  }
+}
+
+async function handleStopCurrentJob() {
+  const selected = selectedJobFromLatest();
+  if (!selected) {
+    alert("No jobs to stop.");
+    return;
+  }
+  if (!canStopJob(selected)) {
+    alert(`Selected job cannot be stopped from status: ${selected.status}`);
+    return;
+  }
+  await requestStopJob(selected.job_id);
 }
 
 function renderStreamOutput(job) {
@@ -512,6 +563,7 @@ function renderJobs(jobs) {
   if (!jobs.length) {
     els.jobsList.innerHTML = '<p class="sub">No run jobs yet.</p>';
     renderStreamOutput(null);
+    updateRunActionButtons([]);
     return;
   }
 
@@ -522,7 +574,8 @@ function renderJobs(jobs) {
     } else {
       node = document.createElement("article");
       node.className = "item";
-      node.innerHTML = '<div class="item-top"><strong class="name"></strong><span class="status"></span></div><p class="meta"></p>';
+      node.innerHTML =
+        '<div class="item-top"><strong class="name"></strong><div class="inline-actions"><span class="status"></span><button class="btn btn-ghost job-stop-btn" type="button">Stop</button></div></div><p class="meta"></p>';
     }
 
     setText(node.querySelector(".name"), job.job_id);
@@ -531,6 +584,17 @@ function renderJobs(jobs) {
     if (hasElement(statusEl)) {
       statusEl.textContent = job.status;
       statusEl.classList.add(job.status);
+    }
+
+    const stopBtn = node.querySelector(".job-stop-btn");
+    if (hasElement(stopBtn)) {
+      const stoppable = canStopJob(job);
+      stopBtn.disabled = !stoppable;
+      stopBtn.textContent = job.status === "stopping" ? "Stopping..." : "Stop";
+      stopBtn.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        await requestStopJob(job.job_id);
+      });
     }
 
     const meta = [];
@@ -562,6 +626,7 @@ function renderJobs(jobs) {
 
     els.jobsList.appendChild(node);
   }
+  updateRunActionButtons(jobs);
 }
 
 async function loadJobs() {
@@ -573,6 +638,7 @@ async function loadJobs() {
 
     const selected = jobs.find((j) => j.job_id === currentJobId) || jobs[0] || null;
     renderStreamOutput(selected);
+    updateRunActionButtons(jobs);
 
     if (selected?.run_name && selected.status === "completed" && selected.run_name !== currentRunName) {
       currentRunName = selected.run_name;
@@ -584,6 +650,7 @@ async function loadJobs() {
     if (hasElement(els.jobsList)) {
       els.jobsList.innerHTML = `<p class="sub">Failed to load jobs: ${err.message}</p>`;
     }
+    updateRunActionButtons([]);
   }
 }
 
@@ -1078,6 +1145,7 @@ async function refreshAll() {
 
 function bindEvents() {
   if (hasElement(els.runForm)) els.runForm.addEventListener("submit", handleRunSubmit);
+  if (hasElement(els.stopCurrentJobBtn)) els.stopCurrentJobBtn.addEventListener("click", handleStopCurrentJob);
   if (hasElement(els.refreshAll)) els.refreshAll.addEventListener("click", refreshAll);
   if (hasElement(els.reloadRuns)) els.reloadRuns.addEventListener("click", loadRuns);
   if (hasElement(els.explainRunBtn)) els.explainRunBtn.addEventListener("click", handleExplainRun);

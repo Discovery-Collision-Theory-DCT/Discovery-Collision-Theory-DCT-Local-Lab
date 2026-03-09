@@ -95,6 +95,10 @@ class RunJob(BaseModel):
     last_event: dict | None = None
 
 
+class JobCancelledError(RuntimeError):
+    pass
+
+
 def _vector_tuple(direction: DiscoveryVector) -> tuple[float, float, float]:
     return float(direction.x), float(direction.y), float(direction.z)
 
@@ -379,6 +383,7 @@ def create_app(output_root: Path) -> FastAPI:
         app.mount("/ui-assets", StaticFiles(directory=str(ui_root), check_dir=True), name="ui-assets")
 
     jobs: dict[str, RunJob] = {}
+    job_cancel_flags: dict[str, threading.Event] = {}
     jobs_lock = threading.Lock()
     model_output_max_chars = 4000
 
@@ -480,6 +485,11 @@ def create_app(output_root: Path) -> FastAPI:
             jobs[job_id] = RunJob.model_validate(payload)
             _persist_jobs_locked()
 
+    def _is_cancel_requested(job_id: str) -> bool:
+        with jobs_lock:
+            flag = job_cancel_flags.get(job_id)
+            return bool(flag and flag.is_set())
+
     def _append_model_output_log(job_id: str, event: dict) -> None:
         raw_text = str(event.get("text", ""))
         text = raw_text[:model_output_max_chars]
@@ -574,11 +584,21 @@ def create_app(output_root: Path) -> FastAPI:
         return f"Event: {event_type}"
 
     def _execute_run_job(job_id: str, req: RunRequest) -> None:
+        def _ensure_not_cancelled() -> None:
+            if _is_cancel_requested(job_id):
+                raise JobCancelledError("Job cancelled by user")
+
+        if _is_cancel_requested(job_id):
+            _update_job(job_id, status="cancelled", error=None)
+            _append_job_log(job_id, "Job cancelled before start", level="warning")
+            return
+
         _update_job(job_id, status="running")
         _append_job_log(job_id, "Job running")
 
         memory = None
         try:
+            _ensure_not_cancelled()
             settings = _build_runtime_settings(req)
             policy_error = settings.validate_model_access_policy()
             if policy_error:
@@ -594,10 +614,12 @@ def create_app(output_root: Path) -> FastAPI:
             if req.use_reasoner:
                 _append_job_log(job_id, f"Reasoner enabled: model={settings.model_name}")
 
+            _ensure_not_cancelled()
             provider = build_provider(settings)
             if hasattr(provider, "set_debug_callback"):
                 provider.set_debug_callback(lambda event: _append_model_output_log(job_id, event))
             if settings.dct_check_model_on_start and not req.skip_model_check:
+                _ensure_not_cancelled()
                 ok, message = provider.check_health()
                 if not ok:
                     raise RuntimeError(f"Model check failed: {message}")
@@ -605,27 +627,36 @@ def create_app(output_root: Path) -> FastAPI:
             else:
                 _append_job_log(job_id, "Model check skipped")
 
+            _ensure_not_cancelled()
             config_path = Path(req.config_path).resolve() if req.config_path else _default_config_for_mode(req.mode)
             if not config_path.exists():
                 raise RuntimeError(f"Config file not found: {config_path}")
             _append_job_log(job_id, f"Using config: {config_path}")
 
+            _ensure_not_cancelled()
             exp_config = load_experiment_config(config_path)
             if req.output_dir:
                 exp_config.output_dir = Path(req.output_dir)
             _append_job_log(job_id, f"Output dir: {exp_config.output_dir}")
 
+            _ensure_not_cancelled()
             memory = SQLiteMemory(settings.dct_sqlite_path)
             orchestrator = DCTOrchestrator(settings=settings, provider=provider, memory=memory)
-            summary, run_output_dir = orchestrator.run(
-                exp_config,
-                progress_callback=lambda event: _append_job_log(
+
+            def _progress_callback(event: dict[str, Any]) -> None:
+                _ensure_not_cancelled()
+                _append_job_log(
                     job_id,
                     message=_event_to_log_message(event),
                     level="info",
                     event=event,
-                ),
+                )
+
+            summary, run_output_dir = orchestrator.run(
+                exp_config,
+                progress_callback=_progress_callback,
             )
+            _ensure_not_cancelled()
 
             _update_job(
                 job_id,
@@ -635,12 +666,17 @@ def create_app(output_root: Path) -> FastAPI:
                 error=None,
             )
             _append_job_log(job_id, f"Job completed: run_name={summary.run_name}")
+        except JobCancelledError:
+            _update_job(job_id, status="cancelled", error=None)
+            _append_job_log(job_id, "Job cancelled by user", level="warning")
         except Exception as exc:  # noqa: BLE001
             _update_job(job_id, status="failed", error=str(exc))
             _append_job_log(job_id, f"Job failed: {exc}", level="error")
         finally:
             if memory is not None:
                 memory.close()
+            with jobs_lock:
+                job_cancel_flags.pop(job_id, None)
 
     @app.get("/")
     def ui_index():
@@ -966,12 +1002,46 @@ def create_app(output_root: Path) -> FastAPI:
         )
         with jobs_lock:
             jobs[job_id] = job
+            job_cancel_flags[job_id] = threading.Event()
             _persist_jobs_locked()
         _append_job_log(job_id, "Job queued")
 
         thread = threading.Thread(target=_execute_run_job, args=(job_id, req), daemon=True)
         thread.start()
         return job.model_dump()
+
+    @app.post("/api/jobs/{job_id}/stop")
+    def stop_job(job_id: str) -> dict:
+        should_log_stop_request = False
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+            if job.status in {"completed", "failed", "cancelled"}:
+                raise HTTPException(status_code=409, detail=f"Job cannot be stopped from status: {job.status}")
+
+            flag = job_cancel_flags.get(job_id)
+            if flag is None:
+                flag = threading.Event()
+                job_cancel_flags[job_id] = flag
+
+            if not flag.is_set():
+                flag.set()
+                should_log_stop_request = True
+
+            payload = job.model_dump()
+            if payload.get("status") in {"queued", "running"}:
+                payload["status"] = "stopping"
+                payload["updated_at"] = utc_now()
+                jobs[job_id] = RunJob.model_validate(payload)
+                _persist_jobs_locked()
+
+        if should_log_stop_request:
+            _append_job_log(job_id, "Stop requested by user", level="warning")
+
+        with jobs_lock:
+            return jobs[job_id].model_dump()
 
     @app.get("/api/jobs")
     def list_jobs() -> list[dict]:

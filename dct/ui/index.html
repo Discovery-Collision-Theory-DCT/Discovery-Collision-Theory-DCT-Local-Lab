@@ -140,7 +140,10 @@
             <label><input type="checkbox" name="skip_model_check" /> skip_model_check</label>
           </div>
 
-          <button class="btn btn-primary" type="submit">Start Experiment</button>
+          <div class="inline-actions">
+            <button id="start-run-btn" class="btn btn-primary" type="submit">Start Experiment</button>
+            <button id="stop-current-job-btn" class="btn btn-ghost" type="button" disabled>Stop Current Job</button>
+          </div>
         </form>
 
         <h3>Run Jobs</h3>
@@ -248,7 +251,10 @@
       <article class="item">
         <div class="item-top">
           <strong class="name"></strong>
-          <span class="status"></span>
+          <div class="inline-actions">
+            <span class="status"></span>
+            <button class="btn btn-ghost job-stop-btn" type="button">Stop</button>
+          </div>
         </div>
         <p class="meta"></p>
       </article>

@@ -236,6 +236,7 @@ ollama pull deepseek-r1:70b
 - Provider 切换时会自动补齐对应 Base URL。
 - Provider/base-url/key 变化后会自动拉取可用模型，供 `Model Name` 与 `Reasoner Model Name` 选择（仍可手动输入）。
 - 支持 reasoner 开关与模型名覆盖。
+- 支持任务启停：`Start Experiment` 启动，`Stop Current Job` 可中止当前选中任务（状态会从 `stopping` 转为 `cancelled`）。
 
 ### Experiment Runs
 - 查看 method summary、uplift、plots、artifacts。
