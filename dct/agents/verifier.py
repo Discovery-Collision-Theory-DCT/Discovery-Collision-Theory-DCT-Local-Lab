@@ -6,7 +6,14 @@ from typing import Any
 
 from dct.llm.prompts import load_prompt
 from dct.llm.provider import LLMProvider
-from dct.schemas import BenchmarkTask, Hypothesis, VerificationResult, VerifierMode, VerifierVerdict
+from dct.schemas import (
+    BenchmarkTask,
+    Hypothesis,
+    RobustnessGateResult,
+    VerificationResult,
+    VerifierMode,
+    VerifierVerdict,
+)
 from dct.utils import clamp01, safe_eval_expression
 
 
@@ -20,6 +27,7 @@ class Verifier:
         task: BenchmarkTask,
         hypothesis: Hypothesis,
         modes: list[str],
+        enable_robustness_gate: bool = True,
     ) -> VerifierVerdict:
         selected_modes = [VerifierMode(m) for m in modes]
         results: list[VerificationResult] = []
@@ -36,16 +44,22 @@ class Verifier:
             results.append(self._predictive_verify(task, hypothesis))
 
         modes_passed = all(r.passed for r in results)
-        robustness = self._robustness_gate(task, hypothesis)
+        robustness = (
+            self._robustness_gate(task, hypothesis)
+            if enable_robustness_gate
+            else self._disabled_robustness_gate("disabled_for_single_mode_ablation")
+        )
         deterministic_pass = modes_passed and robustness["passed"]
 
         confidence_parts = [r.confidence for r in results]
-        if robustness["confidence"] is not None:
+        if robustness["enabled"] and robustness["confidence"] is not None:
             confidence_parts.append(float(robustness["confidence"]))
         deterministic_confidence = clamp01(mean(confidence_parts)) if confidence_parts else 0.0
 
         mode_reason = "; ".join(f"{r.mode.value}: {r.reason}" for r in results)
-        deterministic_reason = f"{mode_reason}; robustness: {robustness['reason']}"
+        deterministic_reason = mode_reason
+        if robustness["enabled"]:
+            deterministic_reason = f"{mode_reason}; robustness: {robustness['reason']}"
 
         llm_reason, llm_conf = self._llm_verifier_note(hypothesis, task, results, robustness)
         final_reason = deterministic_reason if not llm_reason else f"{deterministic_reason}; llm_note: {llm_reason}"
@@ -57,12 +71,17 @@ class Verifier:
             confidence=final_conf,
             reason=final_reason,
             per_mode=results,
+            robustness=RobustnessGateResult.model_validate(robustness),
         )
 
     def _robustness_gate(self, task: BenchmarkTask, hypothesis: Hypothesis) -> dict[str, Any]:
-        pass_threshold = float(task.metadata.get("pass_threshold", 0.75))
-        ood_threshold = float(task.metadata.get("ood_pass_threshold", max(0.55, pass_threshold - 0.10)))
-        stress_threshold = float(task.metadata.get("stress_pass_threshold", max(0.50, pass_threshold - 0.15)))
+        pass_threshold = clamp01(self._safe_float(task.metadata.get("pass_threshold"), 0.75))
+        ood_threshold = clamp01(
+            self._safe_float(task.metadata.get("ood_pass_threshold"), max(0.55, pass_threshold - 0.10))
+        )
+        stress_threshold = clamp01(
+            self._safe_float(task.metadata.get("stress_pass_threshold"), max(0.50, pass_threshold - 0.15))
+        )
 
         ood_acc, ood_n = self._accuracy(task.ood, hypothesis.expression, task)
         stress_acc, stress_n = self._accuracy(task.stress, hypothesis.expression, task)
@@ -92,10 +111,13 @@ class Verifier:
         confidence = mean(confidence_parts) if confidence_parts else None
 
         return {
+            "enabled": True,
             "passed": bool(passed),
             "confidence": confidence,
             "ood_passed": bool(ood_passed),
             "stress_passed": bool(stress_passed),
+            "ood_checked": bool(ood_n > 0),
+            "stress_checked": bool(stress_n > 0),
             "reason": f"{ood_reason}; {stress_reason}",
             "metrics": {
                 "ood_accuracy": float(ood_acc),
@@ -106,6 +128,27 @@ class Verifier:
                 "stress_threshold": float(stress_threshold),
             },
         }
+
+    @staticmethod
+    def _disabled_robustness_gate(reason: str) -> dict[str, Any]:
+        return {
+            "enabled": False,
+            "passed": True,
+            "confidence": None,
+            "ood_passed": True,
+            "stress_passed": True,
+            "ood_checked": False,
+            "stress_checked": False,
+            "reason": reason,
+            "metrics": {},
+        }
+
+    @staticmethod
+    def _safe_float(value: Any, fallback: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(fallback)
 
     def _predictive_verify(self, task: BenchmarkTask, hypothesis: Hypothesis) -> VerificationResult:
         acc, total = self._accuracy(task.heldout, hypothesis.expression, task)

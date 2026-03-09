@@ -32,6 +32,9 @@ def _build_small_task(
     *,
     ood_targets: list[float],
     stress_targets: list[float],
+    pass_threshold: float = 0.75,
+    ood_pass_threshold: float = 0.75,
+    stress_pass_threshold: float = 0.70,
 ) -> BenchmarkTask:
     train = [
         ObservationExample(features={"x": 1.0}, target=1.0),
@@ -56,9 +59,9 @@ def _build_small_task(
         ground_truth_rule_text="identity",
         metadata={
             "target_tolerance": 0.0,
-            "pass_threshold": 0.75,
-            "ood_pass_threshold": 0.75,
-            "stress_pass_threshold": 0.70,
+            "pass_threshold": pass_threshold,
+            "ood_pass_threshold": ood_pass_threshold,
+            "stress_pass_threshold": stress_pass_threshold,
         },
         simulation_cases=sim,
         ood=ood,
@@ -86,6 +89,8 @@ def test_verifier_rejects_if_robustness_gate_fails():
 
     verdict = verifier.verify(task, hypothesis, ["predictive", "symbolic", "simulation"])
     assert verdict.passed is False
+    assert verdict.robustness is not None
+    assert verdict.robustness.enabled is True
     assert "robustness:" in verdict.reason
     assert "ood_accuracy=" in verdict.reason
     assert "stress_accuracy=" in verdict.reason
@@ -111,3 +116,57 @@ def test_verifier_accepts_if_robustness_gate_passes():
 
     verdict = verifier.verify(task, hypothesis, ["predictive", "symbolic", "simulation"])
     assert verdict.passed is True
+    assert verdict.robustness is not None
+    assert verdict.robustness.enabled is True
+
+
+def test_verifier_single_mode_can_disable_robustness_gate():
+    task = _build_small_task(
+        ood_targets=[0.0, 0.0],
+        stress_targets=[0.0, 0.0],
+    )
+    verifier = Verifier(FakeProvider())
+    hypothesis = Hypothesis(
+        hypothesis_id=new_id("hyp"),
+        source="trajectory_a",
+        round_index=0,
+        family=task.family,
+        task_id=task.task_id,
+        rule_text="identity",
+        expression="x",
+        rationale="",
+        confidence=0.9,
+    )
+
+    verdict = verifier.verify(task, hypothesis, ["predictive"], enable_robustness_gate=False)
+    assert verdict.passed is True
+    assert verdict.robustness is not None
+    assert verdict.robustness.enabled is False
+    assert "robustness:" not in verdict.reason
+
+
+def test_verifier_clamps_robustness_thresholds():
+    task = _build_small_task(
+        ood_targets=[5.0, 6.0],
+        stress_targets=[7.0, 8.0],
+        pass_threshold=1.2,
+        ood_pass_threshold=9.9,
+        stress_pass_threshold=-3.0,
+    )
+    verifier = Verifier(FakeProvider())
+    hypothesis = Hypothesis(
+        hypothesis_id=new_id("hyp"),
+        source="trajectory_b",
+        round_index=0,
+        family=task.family,
+        task_id=task.task_id,
+        rule_text="identity",
+        expression="x",
+        rationale="",
+        confidence=0.9,
+    )
+
+    verdict = verifier.verify(task, hypothesis, ["predictive", "symbolic", "simulation"])
+    assert verdict.robustness is not None
+    assert verdict.robustness.metrics["ood_threshold"] == 1.0
+    assert verdict.robustness.metrics["stress_threshold"] == 0.0

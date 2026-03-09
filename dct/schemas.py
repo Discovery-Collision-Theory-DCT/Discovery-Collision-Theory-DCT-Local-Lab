@@ -68,12 +68,25 @@ class VerificationResult(BaseModel):
     metrics: dict[str, float] = Field(default_factory=dict)
 
 
+class RobustnessGateResult(BaseModel):
+    enabled: bool
+    passed: bool
+    confidence: Optional[float] = None
+    reason: str
+    ood_passed: bool = True
+    stress_passed: bool = True
+    ood_checked: bool = False
+    stress_checked: bool = False
+    metrics: dict[str, float] = Field(default_factory=dict)
+
+
 class VerifierVerdict(BaseModel):
     hypothesis_id: str
     passed: bool
     confidence: float
     reason: str
     per_mode: list[VerificationResult]
+    robustness: Optional[RobustnessGateResult] = None
 
 
 class CandidateLogRecord(BaseModel):

@@ -261,6 +261,8 @@ ollama pull deepseek-r1:70b
 - 可在 task `metadata` 覆盖阈值：
   - `ood_pass_threshold`
   - `stress_pass_threshold`
+- 阈值会自动夹紧到 `[0, 1]`，避免异常配置导致验证失真。
+- 验证日志会额外写入 `mode=robustness_gate` 的结构化记录（写入 SQLite `verifications` 表）。
 
 ---
 
@@ -330,7 +332,7 @@ ablation:
 - 禁用碰撞：`no_collision: true`
 - 禁用记忆回写：`no_memory_write_back: true`
 - 禁用验证器：`no_verifier: true`
-- 单验证模式：`single_verifier_mode_only: predictive`
+- 单验证模式：`single_verifier_mode_only: predictive`（会关闭 robustness gate，保证单模式 ablation 纯净）
 
 ---
 

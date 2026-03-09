@@ -153,8 +153,10 @@ class DCTOrchestrator:
         first_valid_round: int | None = None
 
         verifier_modes = config.verifier_modes
+        enable_robustness_gate = True
         if config.ablation.single_verifier_mode_only:
             verifier_modes = [config.ablation.single_verifier_mode_only]
+            enable_robustness_gate = False
 
         for round_index in range(config.rounds):
             for family_index, family in enumerate(config.benchmark_families):
@@ -225,6 +227,7 @@ class DCTOrchestrator:
                     task=task,
                     candidates=candidates,
                     verifier_modes=verifier_modes,
+                    enable_robustness_gate=enable_robustness_gate,
                     disable_verifier=config.ablation.no_verifier,
                     disable_memory_write=config.ablation.no_memory_write_back,
                     memory_expressions=memory_expressions,
@@ -331,6 +334,7 @@ class DCTOrchestrator:
         task,
         candidates: list[Hypothesis],
         verifier_modes: list[str],
+        enable_robustness_gate: bool,
         disable_verifier: bool,
         disable_memory_write: bool,
         memory_expressions: list[str],
@@ -360,7 +364,12 @@ class DCTOrchestrator:
             if disable_verifier:
                 accepted = c.hypothesis_id in accepted_ids
             else:
-                verdict = self.verifier.verify(task=task, hypothesis=c, modes=verifier_modes)
+                verdict = self.verifier.verify(
+                    task=task,
+                    hypothesis=c,
+                    modes=verifier_modes,
+                    enable_robustness_gate=enable_robustness_gate,
+                )
                 self.memory.log_verdict(run_id=run_id, round_index=round_index, verdict=verdict)
                 accepted = verdict.passed
 

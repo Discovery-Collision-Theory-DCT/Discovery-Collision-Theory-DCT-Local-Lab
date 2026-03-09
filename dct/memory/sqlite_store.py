@@ -212,6 +212,33 @@ class SQLiteMemory:
                     utc_now(),
                 ),
             )
+
+        robustness = verdict.robustness
+        if robustness and robustness.enabled:
+            robustness_metrics = dict(robustness.metrics)
+            robustness_metrics["ood_passed"] = float(robustness.ood_passed)
+            robustness_metrics["stress_passed"] = float(robustness.stress_passed)
+            robustness_metrics["ood_checked"] = float(robustness.ood_checked)
+            robustness_metrics["stress_checked"] = float(robustness.stress_checked)
+
+            self.conn.execute(
+                """
+                INSERT INTO verifications(
+                    run_id, round_index, hypothesis_id, mode, passed, confidence, reason, metrics_json, created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    run_id,
+                    round_index,
+                    verdict.hypothesis_id,
+                    "robustness_gate",
+                    int(robustness.passed),
+                    float(robustness.confidence) if robustness.confidence is not None else 0.0,
+                    robustness.reason,
+                    json.dumps(robustness_metrics),
+                    utc_now(),
+                ),
+            )
         self.conn.commit()
 
     def get_recent_theory_summaries(self, run_id: str, limit: int = 12) -> list[str]:
