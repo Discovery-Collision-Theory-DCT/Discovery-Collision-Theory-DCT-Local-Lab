@@ -255,6 +255,13 @@ ollama pull deepseek-r1:70b
 - job 进度自动写入 `outputs/.ui_jobs_state.json`。
 - 前端状态（表单、当前选择、collider 草稿）自动保存并恢复。
 
+### Verifier 鲁棒门控（新增）
+- 在 `predictive/symbolic/simulation` 基础上，新增 OOD/Stress 鲁棒性门控。
+- 判定逻辑：核心三模式通过后，还需满足 OOD/Stress 阈值（若对应数据集存在）。
+- 可在 task `metadata` 覆盖阈值：
+  - `ood_pass_threshold`
+  - `stress_pass_threshold`
+
 ---
 
 ## 输出产物与审计

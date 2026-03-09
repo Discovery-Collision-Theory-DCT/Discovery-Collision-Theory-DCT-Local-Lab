@@ -35,11 +35,19 @@ class Verifier:
         if not results:
             results.append(self._predictive_verify(task, hypothesis))
 
-        deterministic_pass = all(r.passed for r in results)
-        deterministic_confidence = clamp01(mean([r.confidence for r in results]))
-        deterministic_reason = "; ".join(f"{r.mode.value}: {r.reason}" for r in results)
+        modes_passed = all(r.passed for r in results)
+        robustness = self._robustness_gate(task, hypothesis)
+        deterministic_pass = modes_passed and robustness["passed"]
 
-        llm_reason, llm_conf = self._llm_verifier_note(hypothesis, task, results)
+        confidence_parts = [r.confidence for r in results]
+        if robustness["confidence"] is not None:
+            confidence_parts.append(float(robustness["confidence"]))
+        deterministic_confidence = clamp01(mean(confidence_parts)) if confidence_parts else 0.0
+
+        mode_reason = "; ".join(f"{r.mode.value}: {r.reason}" for r in results)
+        deterministic_reason = f"{mode_reason}; robustness: {robustness['reason']}"
+
+        llm_reason, llm_conf = self._llm_verifier_note(hypothesis, task, results, robustness)
         final_reason = deterministic_reason if not llm_reason else f"{deterministic_reason}; llm_note: {llm_reason}"
         final_conf = deterministic_confidence if llm_conf is None else clamp01((deterministic_confidence + llm_conf) / 2.0)
 
@@ -50,6 +58,54 @@ class Verifier:
             reason=final_reason,
             per_mode=results,
         )
+
+    def _robustness_gate(self, task: BenchmarkTask, hypothesis: Hypothesis) -> dict[str, Any]:
+        pass_threshold = float(task.metadata.get("pass_threshold", 0.75))
+        ood_threshold = float(task.metadata.get("ood_pass_threshold", max(0.55, pass_threshold - 0.10)))
+        stress_threshold = float(task.metadata.get("stress_pass_threshold", max(0.50, pass_threshold - 0.15)))
+
+        ood_acc, ood_n = self._accuracy(task.ood, hypothesis.expression, task)
+        stress_acc, stress_n = self._accuracy(task.stress, hypothesis.expression, task)
+
+        checks = []
+        confidence_parts: list[float] = []
+
+        if ood_n > 0:
+            ood_passed = ood_acc >= ood_threshold
+            checks.append(ood_passed)
+            confidence_parts.append(ood_acc)
+            ood_reason = f"ood_accuracy={ood_acc:.3f} threshold={ood_threshold:.3f}"
+        else:
+            ood_passed = True
+            ood_reason = "ood_n=0 skipped"
+
+        if stress_n > 0:
+            stress_passed = stress_acc >= stress_threshold
+            checks.append(stress_passed)
+            confidence_parts.append(stress_acc)
+            stress_reason = f"stress_accuracy={stress_acc:.3f} threshold={stress_threshold:.3f}"
+        else:
+            stress_passed = True
+            stress_reason = "stress_n=0 skipped"
+
+        passed = all(checks) if checks else True
+        confidence = mean(confidence_parts) if confidence_parts else None
+
+        return {
+            "passed": bool(passed),
+            "confidence": confidence,
+            "ood_passed": bool(ood_passed),
+            "stress_passed": bool(stress_passed),
+            "reason": f"{ood_reason}; {stress_reason}",
+            "metrics": {
+                "ood_accuracy": float(ood_acc),
+                "ood_n": float(ood_n),
+                "stress_accuracy": float(stress_acc),
+                "stress_n": float(stress_n),
+                "ood_threshold": float(ood_threshold),
+                "stress_threshold": float(stress_threshold),
+            },
+        }
 
     def _predictive_verify(self, task: BenchmarkTask, hypothesis: Hypothesis) -> VerificationResult:
         acc, total = self._accuracy(task.heldout, hypothesis.expression, task)
@@ -109,6 +165,7 @@ class Verifier:
         hypothesis: Hypothesis,
         task: BenchmarkTask,
         mode_results: list[VerificationResult],
+        robustness: dict[str, Any],
     ) -> tuple[str | None, float | None]:
         payload = {
             "task": {
@@ -122,6 +179,7 @@ class Verifier:
                 "source": hypothesis.source,
             },
             "mode_results": [r.model_dump(mode="json") for r in mode_results],
+            "robustness_gate": robustness,
         }
         try:
             data = self.provider.generate_json(self.system_prompt, json.dumps(payload, ensure_ascii=True))
